@@ -196,14 +196,23 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         const method = msg.method as string;
         const params = msg.params ?? {};
         const legacy = method === "execCommandApproval" || method === "applyPatchApproval";
-        const isQuestion = method === "item/tool/requestUserInput";
+        const isMcpElicitation = method === "mcpServer/elicitation/request";
+        const isMcpApproval = isMcpElicitation && params._meta?.codex_approval_kind === "mcp_tool_call";
+        const isQuestion = method === "item/tool/requestUserInput" || (isMcpElicitation && !isMcpApproval);
+        const mcpTool =
+          typeof params.message === "string" ? params.message.match(/run tool ["“]([^"”]+)["”]/i)?.[1] : undefined;
         const tool =
           method === "item/fileChange/requestApproval" || method === "applyPatchApproval"
             ? "edit"
+            : isMcpApproval
+              ? `mcp:${params.serverName || "server"}/${mcpTool || "tool"}`
             : isQuestion
               ? "ask_user"
               : "shell";
         if (config.fullAuto && !isQuestion) {
+          if (isMcpApproval) {
+            return send({ jsonrpc: "2.0", id: msg.id, result: { action: "accept", content: {}, _meta: null } });
+          }
           return send({ jsonrpc: "2.0", id: msg.id, result: { decision: legacy ? "approved" : "accept" } });
         }
         const requestId = newId();
@@ -212,6 +221,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ? params.command.slice(0, 200)
             : Array.isArray(params.questions)
               ? params.questions.map((q: any) => q.question ?? q.header).filter(Boolean).join(" · ")
+              : typeof params.message === "string"
+                ? params.message.slice(0, 300)
               : typeof params.reason === "string"
                 ? params.reason
                 : tool;
@@ -228,11 +239,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             }
             send({ jsonrpc: "2.0", id: msg.id, result: { answers } });
           } else {
-            send({
-              jsonrpc: "2.0",
-              id: msg.id,
-              result: { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" },
-            });
+            const result = isMcpApproval
+              ? { action: behavior === "allow" ? "accept" : "decline", content: behavior === "allow" ? {} : null, _meta: null }
+              : { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" };
+            send({ jsonrpc: "2.0", id: msg.id, result });
           }
           emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source: "user" });
         };
