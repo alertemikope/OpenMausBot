@@ -6,7 +6,7 @@ import { Check, CircleHelp, ExternalLink, Loader2, TriangleAlert } from "lucide-
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { cn } from "@/lib/cn";
 
-export type ConfigSection = "composio" | "composioApi" | "box";
+export type ConfigSection = "composio" | "composioApi" | "pennylane" | "box";
 
 const SECTIONS: Record<
   ConfigSection,
@@ -16,6 +16,10 @@ const SECTIONS: Record<
   composioApi: {
     body: (v) => ({ composio: { apiKey: v } }),
     flag: (c) => c.composio.apiKeyConfigured ?? false,
+  },
+  pennylane: {
+    body: (v) => ({ pennylane: { token: v, readonly: false, api2026: true } }),
+    flag: (c) => c.pennylane?.configured ?? false,
   },
   box: { body: (v) => ({ box: { token: v } }), flag: (c) => c.box.configured },
 };
@@ -47,6 +51,15 @@ const CREDENTIALS: Record<
     href: "https://docs.composio.dev/reference/authenticating-to-composio/project-api-key-permissions",
     linkLabel: "Open Composio API key guide",
     optional: true,
+  },
+  pennylane: {
+    label: "Pennylane Company API token",
+    placeholder: "Paste your Pennylane token",
+    description: "Give every compatible bot access to Pennylane Company API v2. This setup enables writing as requested.",
+    href: "https://pennylane.readme.io/docs/generating-my-api-token",
+    linkLabel: "Open Pennylane token guide",
+    optional: true,
+    warning: "This credential can modify accounting data. Review every requested write before approving it.",
   },
   box: {
     label: "Box API key",

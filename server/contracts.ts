@@ -100,6 +100,8 @@ export interface SendTurnInput {
   /** Per-bot integrations the driver may hand to the agent as tools. */
   integrations?: {
     composio?: { url?: string; key: string };
+    /** Pennylane Company API v2 through the local stdio MCP server. */
+    pennylane?: { command: string; args: string[]; env: Record<string, string> };
     /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter. */
     computer?: { kind?: "box"; boxId: string; token: string };
     /** Direct stdio connection to a Cua Driver MCP server (host or sandbox). */

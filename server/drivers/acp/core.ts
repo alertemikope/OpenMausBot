@@ -152,6 +152,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         if (agents) {
           servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
         }
+        const pennylane = turn.integrations?.pennylane;
+        if (pennylane) {
+          servers.push({
+            name: "pennylane",
+            command: pennylane.command,
+            args: pennylane.args,
+            env: acpEnv(pennylane.env),
+          });
+        }
         // The bot's computer, mounted exactly like the Claude driver does.
         // Cloud boxes use the REST adapter; host and sandbox Cua connections
         // expose Cua Driver's official MCP server directly.

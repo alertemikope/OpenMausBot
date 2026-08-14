@@ -523,6 +523,19 @@ async function startTurn(
     try {
       const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
       if (cfg.composio?.key) integrations.composio = { key: cfg.composio.key, url: cfg.composio.url };
+      if (cfg.pennylane?.token) {
+        integrations.pennylane = {
+          command: cfg.pennylane.command?.trim() || "mcp-pennylane",
+          args: [],
+          env: {
+            PENNYLANE_API_KEY: cfg.pennylane.token,
+            PENNYLANE_BASE_URL: cfg.pennylane.baseUrl || "https://app.pennylane.com",
+            PENNYLANE_READONLY: String(cfg.pennylane.readonly !== false),
+            PENNYLANE_ENV: "production",
+            PENNYLANE_API_2026: String(cfg.pennylane.api2026 !== false),
+          },
+        };
+      }
       const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";
@@ -858,6 +871,10 @@ function configStatus() {
   return {
     xai: { configured: Boolean(cfg.xai?.key) },
     composio: { configured: Boolean(cfg.composio?.key), apiKeyConfigured: Boolean(cfg.composio?.apiKey) },
+    pennylane: {
+      configured: Boolean(cfg.pennylane?.token),
+      writeEnabled: Boolean(cfg.pennylane?.token) && cfg.pennylane?.readonly === false,
+    },
     box: { configured: Boolean(cfg.box?.token) },
     // the chosen voice is a setting, not a secret; the key is reported the
     // same configured-or-not way as every other credential
@@ -1493,10 +1510,29 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "box", "tts", "profile"] as const) {
+      for (const key of ["xai", "composio", "pennylane", "box", "tts", "profile"] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
+      const newPennylane = patch.pennylane as { token?: unknown; baseUrl?: unknown } | undefined;
+      if (typeof newPennylane?.token === "string" && newPennylane.token.trim()) {
+        const baseUrl =
+          typeof newPennylane.baseUrl === "string" && newPennylane.baseUrl.trim()
+            ? newPennylane.baseUrl.trim()
+            : cfg.pennylane?.baseUrl || "https://app.pennylane.com";
+        let response: Response;
+        try {
+          response = await fetch(`${baseUrl.replace(/\/$/, "")}/api/external/v2/me`, {
+            headers: { Authorization: `Bearer ${newPennylane.token.trim()}`, Accept: "application/json" },
+            signal: AbortSignal.timeout(15_000),
+          });
+        } catch {
+          return json(res, 400, { error: "Pennylane could not be reached to verify this token" });
+        }
+        if (!response.ok) {
+          return json(res, 400, { error: `Pennylane rejected this token (${response.status})` });
+        }
+      }
       // check a box token against the provider before storing it: a
       // rejected token used to save happily and only surface as a 401 in
       // another panel later, with nothing the user could act on

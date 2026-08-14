@@ -270,6 +270,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         };
         allowed.push("mcp__composio");
       }
+      if (turn.integrations?.pennylane) {
+        mcpServers.pennylane = { ...turn.integrations.pennylane };
+        allowed.push("mcp__pennylane");
+      }
       if (turn.integrations?.computer) {
         mcpServers.computer = {
           command: process.execPath,

@@ -61,18 +61,34 @@ const COMPOSIO_KEY_ENV = "OPENMAUSBOT_COMPOSIO_KEY";
  * Add a per-process MCP override and pass the secret through an environment
  * header reference so it never appears in argv or Codex's config on disk. */
 function appServerArgs(turn: SendTurnInput, env: Record<string, string | undefined>): string[] {
+  const args: string[] = [];
   const composio = turn.integrations?.composio;
-  if (!composio?.key) return ["app-server"];
+  if (composio?.key) {
+    env[COMPOSIO_KEY_ENV] = composio.key;
+    const url = composio.url || "https://connect.composio.dev/mcp";
+    args.push(
+      "-c",
+      `mcp_servers.composio.url=${JSON.stringify(url)}`,
+      "-c",
+      `mcp_servers.composio.env_http_headers={\"x-consumer-api-key\"=\"${COMPOSIO_KEY_ENV}\"}`,
+    );
+  }
 
-  env[COMPOSIO_KEY_ENV] = composio.key;
-  const url = composio.url || "https://connect.composio.dev/mcp";
-  return [
-    "-c",
-    `mcp_servers.composio.url=${JSON.stringify(url)}`,
-    "-c",
-    `mcp_servers.composio.env_http_headers={\"x-consumer-api-key\"=\"${COMPOSIO_KEY_ENV}\"}`,
-    "app-server",
-  ];
+  const pennylane = turn.integrations?.pennylane;
+  if (pennylane) {
+    Object.assign(env, pennylane.env);
+    args.push(
+      "-c",
+      `mcp_servers.pennylane.command=${JSON.stringify(pennylane.command)}`,
+      "-c",
+      `mcp_servers.pennylane.args=${JSON.stringify(pennylane.args)}`,
+      "-c",
+      `mcp_servers.pennylane.env_vars=${JSON.stringify(Object.keys(pennylane.env))}`,
+    );
+  }
+
+  args.push("app-server");
+  return args;
 }
 
 export const CodexDriver: ProviderDriver<CodexConfig> = {

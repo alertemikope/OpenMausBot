@@ -132,6 +132,43 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.env.OPENMAUSBOT_COMPOSIO_KEY).toBe("ck_test_should_stay_out_of_argv");
   });
 
+  it("mounts Pennylane with write-capable env passed outside argv", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-pennylane",
+      text: "check accounting",
+      integrations: {
+        pennylane: {
+          command: "/opt/openmausbot/mcp-pennylane",
+          args: [],
+          env: {
+            PENNYLANE_API_KEY: "pl_secret_should_stay_out_of_argv",
+            PENNYLANE_READONLY: "false",
+            PENNYLANE_ENV: "production",
+          },
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toEqual([
+      "-c",
+      'mcp_servers.pennylane.command="/opt/openmausbot/mcp-pennylane"',
+      "-c",
+      "mcp_servers.pennylane.args=[]",
+      "-c",
+      'mcp_servers.pennylane.env_vars=["PENNYLANE_API_KEY","PENNYLANE_READONLY","PENNYLANE_ENV"]',
+      "app-server",
+    ]);
+    expect(seen.argv.join(" ")).not.toContain("pl_secret_should_stay_out_of_argv");
+    expect(seen.env.PENNYLANE_API_KEY).toBe("pl_secret_should_stay_out_of_argv");
+    expect(seen.env.PENNYLANE_READONLY).toBe("false");
+  });
+
   it("streams agentMessage deltas without re-emitting the settled text", async () => {
     process.env.FAKE_CODEX_MODE = "stream";
     await create();

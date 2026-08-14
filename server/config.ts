@@ -1,5 +1,6 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
+//     "pennylane": {"token":"…", "readonly":false},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,6 +15,9 @@ export interface AppConfig {
    * apiKey = ak_… project API key — optional, unlocks the full toolkit
    * catalog with official logos in the plugins marketplace. */
   composio?: { key?: string; apiKey?: string; url?: string };
+  /** Pennylane Company API v2, exposed through the local mcp-pennylane
+   * stdio server. Readonly defaults true unless explicitly disabled. */
+  pennylane?: { token?: string; command?: string; baseUrl?: string; readonly?: boolean; api2026?: boolean };
   box?: { token?: string };
   /** Voice (ElevenLabs). `key` is the credential and is never echoed back;
    * `voice` is the chosen voice id, which is a setting, not a secret. */
@@ -52,6 +56,11 @@ export function loadConfig(): AppConfig {
   }
   cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
   cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
+  cfg.pennylane = {
+    token: process.env.PENNYLANE_API_KEY,
+    baseUrl: process.env.PENNYLANE_BASE_URL,
+    ...cfg.pennylane,
+  };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
   cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
   return cfg;
@@ -67,7 +76,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "box", "tts", "profile"] as const) {
+  for (const key of ["xai", "composio", "pennylane", "box", "tts", "profile"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }
