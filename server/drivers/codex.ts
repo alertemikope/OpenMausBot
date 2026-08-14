@@ -54,6 +54,26 @@ function decodeConfig(raw: unknown): CodexConfig {
 const QUESTION_TIMEOUT_NOTE = "No answer was given — use your best judgment.";
 const DENY_TIMEOUT_NOTE =
   "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const COMPOSIO_KEY_ENV = "OPENMAUSBOT_COMPOSIO_KEY";
+
+/** Codex app-server inherits the user's normal MCP config, but OpenMausBot's
+ * Composio credential is app-owned and intentionally absent from that file.
+ * Add a per-process MCP override and pass the secret through an environment
+ * header reference so it never appears in argv or Codex's config on disk. */
+function appServerArgs(turn: SendTurnInput, env: Record<string, string | undefined>): string[] {
+  const composio = turn.integrations?.composio;
+  if (!composio?.key) return ["app-server"];
+
+  env[COMPOSIO_KEY_ENV] = composio.key;
+  const url = composio.url || "https://connect.composio.dev/mcp";
+  return [
+    "-c",
+    `mcp_servers.composio.url=${JSON.stringify(url)}`,
+    "-c",
+    `mcp_servers.composio.env_http_headers={\"x-consumer-api-key\"=\"${COMPOSIO_KEY_ENV}\"}`,
+    "app-server",
+  ];
+}
 
 export const CodexDriver: ProviderDriver<CodexConfig> = {
   driverKind: DRIVER_KIND,
@@ -103,7 +123,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       // billing to pay-as-you-go (agentcal)
       delete env.OPENAI_API_KEY;
 
-      const child = spawnCli(config.cli, ["app-server"], {
+      const child = spawnCli(config.cli, appServerArgs(turn, env), {
         cwd: turn.cwd ?? homedir(),
         env,
         stdio: ["pipe", "pipe", "pipe"],

@@ -53,6 +53,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_MODE;
     delete process.env.FAKE_CODEX_DUMP;
     delete process.env.OPENAI_API_KEY;
+    delete process.env.OPENMAUSBOT_COMPOSIO_KEY;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
@@ -100,6 +101,35 @@ describe("CodexDriver turns (fake app-server)", () => {
     // persona rides in front of the prompt text — codex has no system slot
     const turnStart = seen.calls.at(-1);
     expect(turnStart.params.input[0].text).toBe("You are Testy.\n\nlist files");
+  });
+
+  it("mounts Composio without exposing its key in argv", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-composio",
+      text: "check mail",
+      integrations: {
+        composio: {
+          url: "https://connect.example.test/mcp?tenant=one",
+          key: "ck_test_should_stay_out_of_argv",
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toEqual([
+      "-c",
+      'mcp_servers.composio.url="https://connect.example.test/mcp?tenant=one"',
+      "-c",
+      'mcp_servers.composio.env_http_headers={"x-consumer-api-key"="OPENMAUSBOT_COMPOSIO_KEY"}',
+      "app-server",
+    ]);
+    expect(seen.argv.join(" ")).not.toContain("ck_test_should_stay_out_of_argv");
+    expect(seen.env.OPENMAUSBOT_COMPOSIO_KEY).toBe("ck_test_should_stay_out_of_argv");
   });
 
   it("streams agentMessage deltas without re-emitting the settled text", async () => {
