@@ -98,8 +98,8 @@ export function VoiceSettings() {
 
   return (
     <div className="space-y-3">
-    <div className="rounded-xl bg-card p-4">
-      <div className="text-[15px] font-medium text-ink">Voice</div>
+    <section aria-labelledby="voice-settings-heading" className="rounded-xl bg-card p-4">
+      <h2 id="voice-settings-heading" className="text-[15px] font-medium text-ink">Voice</h2>
       <div className="mt-0.5 text-[13px] text-ink-secondary">
         Read replies aloud and talk to your bots, using your own ElevenLabs account. Billed per character by
         ElevenLabs.
@@ -123,6 +123,8 @@ export function VoiceSettings() {
             className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
           />
           <button
+            type="button"
+            aria-label="Save ElevenLabs key"
             onClick={() => key.trim() && void save({ key: key.trim() })}
             disabled={saving || !key.trim()}
             className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
@@ -174,12 +176,12 @@ export function VoiceSettings() {
       )}
 
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
-    </div>
+    </section>
     {wake?.available && (
-      <div className="rounded-xl bg-card p-4">
+      <section aria-labelledby="wake-word-heading" className="rounded-xl bg-card p-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-[15px] font-medium text-ink">Wake word</div>
+            <h2 id="wake-word-heading" className="text-[15px] font-medium text-ink">Wake word</h2>
             <div className="mt-0.5 text-[13px] text-ink-secondary">
               Listen locally for a phrase, open the selected bot's call, and send the command that follows it.
               Audio stays on this Mac.
@@ -188,6 +190,7 @@ export function VoiceSettings() {
           <button
             type="button"
             role="switch"
+            aria-label="Enable wake word"
             aria-checked={wake.enabled}
             onClick={() => void saveWake({ enabled: !wake.enabled, phrase: wakePhrase })}
             disabled={savingWake}
@@ -217,6 +220,8 @@ export function VoiceSettings() {
             className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
           />
           <button
+            type="button"
+            aria-label="Save wake phrase"
             onClick={() => void saveWake({ phrase: wakePhrase })}
             disabled={savingWake || !wakePhrase.trim() || wakePhrase.trim() === wake.phrase}
             className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
@@ -239,7 +244,7 @@ export function VoiceSettings() {
                 ? "Paused while a call or dictation session owns the microphone"
                 : "Off"}
         </div>
-      </div>
+      </section>
     )}
     </div>
   );
