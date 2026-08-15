@@ -161,10 +161,6 @@ export interface ConfigStatus {
   composio: { configured: boolean; apiKeyConfigured?: boolean };
   pennylane?: { configured: boolean; writeEnabled: boolean };
   box: { configured: boolean };
-  /** Voice (ElevenLabs). `configured` = a key is saved; `ready` = a key AND
-   * a voice, which is what it takes to actually speak. The key itself is
-   * never echoed back. */
-  tts?: { configured: boolean; ready: boolean; voice: string };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string };
 }
@@ -1181,7 +1177,6 @@ export function StoreProvider({ children }: { children: ReactNode }) {
               xai: frame.xai,
               composio: frame.composio,
               box: frame.box,
-              tts: frame.tts,
               profile: frame.profile,
             },
           });

@@ -29,10 +29,12 @@ import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { EventBus } from "./harness/bus.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, roomResponders, Store, type GroupDefaultResponder, type Message } from "./store.ts";
-import * as tts from "./tts/index.ts";
-import { narrateTool, toUtterances } from "./tts/speech-text.ts";
+import { narrateTool } from "./speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { RoutineManager, type RoutineRunOn } from "./routines.ts";
+import { HarnessAgentConsultRuntime } from "./realtime-voice/agent-consult.ts";
+import { ElectronOAuthClient } from "./realtime-voice/oauth-client.ts";
+import { RealtimeSessionBroker } from "./realtime-voice/session-broker.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -705,6 +707,32 @@ async function startTurn(
   })();
 }
 
+// Realtime voice delegates through this exact turn owner. It receives the
+// selected bot's existing thread, model, MCPs, permissions, memory and tools;
+// GPT-Live never gets a second tool path of its own.
+const agentConsult = new HarnessAgentConsultRuntime({
+  resolveTarget: (targetId) => {
+    const bot = store.bot(targetId);
+    if (!bot) return undefined;
+    return {
+      targetId,
+      threadId: bot.threadId,
+      busy: Boolean(bot.busy),
+      adapter: registry.get(bot.modelSelection.instanceId)?.adapter,
+    };
+  },
+  startTurn: (targetId, prompt, onDispatchError) => startTurn(targetId, prompt, { onDispatchError }),
+  subscribe: (listener) => bus.subscribe(listener),
+});
+
+const realtimeBroker = new RealtimeSessionBroker({
+  targetExists: (targetId) => Boolean(store.bot(targetId)),
+  oauth: new ElectronOAuthClient(),
+  runAgentConsult: (input) => agentConsult.run(input),
+  controlAgent: (input) => agentConsult.control(input),
+  respondToRequest: (input) => agentConsult.respondToRequest(input),
+});
+
 // ── routines: persisted definitions → detached bot tasks ───────────────
 // The scheduler owns timing and receipts; the existing harness remains the
 // only owner of provider sessions, approvals, tools, computers and messages.
@@ -893,9 +921,6 @@ function configStatus() {
       writeEnabled: Boolean(cfg.pennylane?.token) && cfg.pennylane?.readonly === false,
     },
     box: { configured: Boolean(cfg.box?.token) },
-    // the chosen voice is a setting, not a secret; the key is reported the
-    // same configured-or-not way as every other credential
-    tts: tts.describeVoice(cfg),
     // not a secret — the sidebar shows it
     profile: { name: cfg.profile?.name ?? "", email: cfg.profile?.email ?? "" },
   };
@@ -968,11 +993,133 @@ function readBody(req: IncomingMessage): Promise<any> {
   });
 }
 
+function readTextBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(Buffer.concat(chunks).toString("utf8"));
+    };
+    const timer = setTimeout(
+      () => finish(Object.assign(new Error("request body timed out"), { status: 408 })),
+      15_000,
+    );
+    timer.unref?.();
+    req.on("data", (chunk: Buffer | string) => {
+      if (settled) return;
+      const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        finish(Object.assign(new Error("body too large"), { status: 413 }));
+        return;
+      }
+      chunks.push(value);
+    });
+    req.on("end", () => finish());
+    req.on("error", (error) => finish(error));
+  });
+}
+
+function realtimeOriginAllowed(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${PORT}`);
   const path = url.pathname;
   const method = req.method ?? "GET";
   try {
+    // ── GPT-Live WebRTC broker ─────────────────────────────────────────
+    // No OAuth value is ever serialized here. The renderer gets one random,
+    // single-use offer credential; Electron answers the harness over its
+    // private utility-process channel when an access token is needed.
+    if (path.startsWith("/api/realtime/") && !realtimeOriginAllowed(req)) {
+      return json(res, 403, { error: "origin not allowed" });
+    }
+    if (method === "POST" && path === "/api/realtime/sessions") {
+      if (!String(req.headers["content-type"] ?? "").toLowerCase().startsWith("application/json")) {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const body = await readBody(req);
+      const session = realtimeBroker.createSession({
+        targetId: typeof body.targetId === "string" ? body.targetId : "",
+        voice: typeof body.voice === "string" ? body.voice : undefined,
+        language: typeof body.language === "string" ? body.language : undefined,
+        initialText: typeof body.initialText === "string" ? body.initialText : undefined,
+      });
+      return json(res, 201, session);
+    }
+    if (method === "POST" && path === "/api/realtime/offers") {
+      if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/sdp") {
+        return json(res, 415, { error: "content-type must be application/sdp" });
+      }
+      const offerToken = req.headers.authorization?.match(/^Bearer\s+([^\s]+)$/iu)?.[1];
+      if (!offerToken) return json(res, 401, { error: "realtime offer token required" });
+      const answer = await realtimeBroker.acceptOffer(offerToken, await readTextBody(req, 256 * 1024));
+      res.writeHead(200, {
+        "content-type": "application/sdp",
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+        "x-openmaus-realtime-transport": answer.transport,
+        "x-openmaus-realtime-model": answer.model,
+      });
+      return res.end(answer.answerSdp);
+    }
+    const realtimeInterruptMatch = path.match(/^\/api\/realtime\/sessions\/(voice-[\w-]+)\/voice\/interrupt$/u);
+    if (realtimeInterruptMatch && method === "POST") {
+      return realtimeBroker.interruptVoice(realtimeInterruptMatch[1])
+        ? json(res, 200, { ok: true })
+        : json(res, 409, { error: "realtime voice is not active" });
+    }
+    const realtimeEventsMatch = path.match(/^\/api\/realtime\/sessions\/(voice-[\w-]+)\/events$/u);
+    if (realtimeEventsMatch && method === "POST") {
+      if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        return json(res, 415, { error: "content-type must be application/json" });
+      }
+      const payload = await readTextBody(req, 1024 * 1024);
+      try { JSON.parse(payload); } catch { return json(res, 400, { error: "invalid realtime event" }); }
+      if (!realtimeBroker.ingestEvent(realtimeEventsMatch[1], payload)) {
+        return json(res, 409, { error: "realtime event bridge is not active" });
+      }
+      res.writeHead(204, { "cache-control": "no-store" });
+      return res.end();
+    }
+    if (realtimeEventsMatch && method === "GET") {
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+        "x-content-type-options": "nosniff",
+      });
+      res.write(": openmausbot realtime sideband\n\n");
+      const unsubscribe = realtimeBroker.subscribe(realtimeEventsMatch[1], (payload) => res.write(`data: ${payload}\n\n`));
+      if (!unsubscribe) return res.end();
+      req.once("close", unsubscribe);
+      return;
+    }
+    const realtimeMatch = path.match(/^\/api\/realtime\/sessions\/(voice-[\w-]+)$/u);
+    if (realtimeMatch && method === "GET") {
+      const session = realtimeBroker.describe(realtimeMatch[1]);
+      return session ? json(res, 200, session) : json(res, 404, { error: "no such realtime session" });
+    }
+    if (realtimeMatch && method === "DELETE") {
+      return (await realtimeBroker.closeSession(realtimeMatch[1]))
+        ? json(res, 200, { ok: true })
+        : json(res, 404, { error: "no such realtime session" });
+    }
+
     // ── internal peer-agent comms (localhost + shared token only) ──────
     // The agents-proxy (spawned inside a bot's agent process) calls these to
     // discover peers and hand a message to one. Not part of the public API.
@@ -1527,7 +1674,7 @@ const server = createServer(async (req, res) => {
     if ((method === "PUT" || method === "PATCH") && path === "/api/config") {
       const body = await readBody(req);
       const patch: Record<string, object> = {};
-      for (const key of ["xai", "composio", "pennylane", "box", "tts", "profile"] as const) {
+      for (const key of ["xai", "composio", "pennylane", "box", "profile"] as const) {
         if (body[key] && typeof body[key] === "object") patch[key] = body[key];
       }
       if (!Object.keys(patch).length) return json(res, 400, { error: "nothing to save" });
@@ -1558,66 +1705,13 @@ const server = createServer(async (req, res) => {
         const check = await box.verifyToken(newBoxToken.trim());
         if (!check.ok) return json(res, 400, { error: check.message });
       }
-      // same rule for a voice key — and check it against the provider the
-      // patch SELECTS, not the one already saved, or pasting a Cartesia key
-      // while switching from ElevenLabs validates against the wrong service
-      const newTts = patch.tts as { key?: unknown } | undefined;
-      if (typeof newTts?.key === "string" && newTts.key.trim()) {
-        const check = await tts.verifyKey(newTts.key.trim());
-        if (!check.ok) return json(res, 400, { error: check.message });
-      }
       saveConfig(patch);
       Object.assign(cfg, loadConfig());
-      // provider keys change the fleet; a profile or voice edit must not
-      // kill in-flight turns with a pointless reload — no driver reads
-      // either, and picking a voice mid-turn should be free
-      if (Object.keys(patch).some((k) => k !== "profile" && k !== "tts")) await reloadProviders();
+      // Provider keys change the fleet; a profile edit must not kill turns.
+      if (Object.keys(patch).some((k) => k !== "profile")) await reloadProviders();
       const status = configStatus();
       broadcast({ kind: "config", ...status });
       return json(res, 200, status);
-    }
-
-    // ── voice ─────────────────────────────────────────────────────────
-    // Splitting text into utterances lives HERE, not in the renderer, for
-    // the same reason approvalKey does — it is the piece most likely to be
-    // tuned against real transcripts, and it belongs next to the transform
-    // that produced it.
-    if (method === "POST" && path === "/api/tts/prepare") {
-      const body = await readBody(req);
-      return json(res, 200, {
-        ready: tts.voiceReady(cfg, typeof body.voiceId === "string" ? body.voiceId : undefined),
-        utterances: toUtterances(String(body.text ?? "")),
-      });
-    }
-    if (method === "GET" && path === "/api/tts/voices") {
-      try {
-        return json(res, 200, { voices: await tts.listVoices(cfg) });
-      } catch (e) {
-        return json(res, 200, { voices: [], error: e instanceof Error ? e.message : String(e) });
-      }
-    }
-    if (method === "POST" && path === "/api/tts/speak") {
-      const body = await readBody(req);
-      const text = String(body.text ?? "").trim();
-      if (!text) return json(res, 400, { error: "text required" });
-      // The normal client sends <=320-character utterances. A hard ceiling
-      // prevents an arbitrary local request from turning the user's hosted
-      // voice account into an unbounded, billable synthesis job.
-      if (text.length > 500) return json(res, 413, { error: "voice utterances are limited to 500 characters" });
-      try {
-        const audio = await tts.speak(cfg, text, typeof body.voiceId === "string" ? body.voiceId : undefined);
-        res.writeHead(200, {
-          "content-type": audio.mime,
-          "content-length": String(audio.bytes.byteLength),
-          "cache-control": "no-store",
-        });
-        return res.end(Buffer.from(audio.bytes));
-      } catch (e) {
-        // "you haven't set this up yet" is not a provider failure — 409 so
-        // the client can point at App Settings instead of showing a 502
-        if (e instanceof tts.NoVoiceConfigured) return json(res, 409, { error: e.message });
-        return json(res, 502, { error: e instanceof Error ? e.message : String(e) });
-      }
     }
 
     // ── connectors (Composio) ──
@@ -1695,6 +1789,6 @@ server.listen(PORT, "127.0.0.1", () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     routines?.stop();
-    void registry.disposeAll().finally(() => process.exit(0));
+    void realtimeBroker.closeAll().finally(() => registry.disposeAll().finally(() => process.exit(0)));
   });
 }

@@ -25,6 +25,11 @@ contextBridge.exposeInMainWorld("ogb", {
   wakeConfigure: (patch) => ipcRenderer.invoke("wake:configure", patch),
   wakeSetCallActive: (active) => ipcRenderer.invoke("wake:call-active", active),
   wakeResumeTrigger: () => ipcRenderer.invoke("wake:resume-trigger"),
+  chatgptOAuth: {
+    status: () => ipcRenderer.invoke("chatgpt-oauth:status"),
+    connect: () => ipcRenderer.invoke("chatgpt-oauth:connect"),
+    disconnect: () => ipcRenderer.invoke("chatgpt-oauth:disconnect"),
+  },
   onWakeState: (cb) => {
     const handler = (_event, value) => cb(value);
     ipcRenderer.on("wake:state", handler);

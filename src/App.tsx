@@ -60,9 +60,9 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [state.bots, state.selectedId, dispatch]);
 
-  // A passive local wake turn enters the existing call surface rather than a
-  // second voice stack: the same bot, permissions, narration and approvals
-  // remain authoritative. The native listener has already released the mic.
+  // The local helper has already released its microphone. The captured first
+  // command enters GPT-Live exactly once as initial context; only a failed
+  // connection sends it through the normal text path as a safe fallback.
   useEffect(() => {
     const bridge = window.ogb;
     if (!bridge?.onWakeCommand) return;
@@ -73,9 +73,14 @@ function Shell() {
         return;
       }
       dispatch({ type: "select", id: target.id });
-      startCall(target.id);
-      if (group) dispatch({ type: "sendGroup", groupId: group.id, text });
-      else dispatch({ type: "send", botId: target.id, text });
+      if (group) {
+        // Realtime rooms deliberately have no ambiguous multi-agent call
+        // owner. Preserve the command as text and immediately rearm Kenpachi.
+        dispatch({ type: "sendGroup", groupId: group.id, text });
+        void bridge.wakeResumeTrigger?.();
+      } else {
+        startCall(target.id, { initialText: text });
+      }
     });
   }, [bot, dispatch, group]);
 

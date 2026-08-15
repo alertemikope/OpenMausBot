@@ -88,6 +88,33 @@ export function createAcpDriver(support) {
                 if (agents) {
                     servers.push({ name: "agents", command: agents.command, args: agents.args, env: acpEnv(agents.env) });
                 }
+                const pennylane = turn.integrations?.pennylane;
+                if (pennylane) {
+                    servers.push({
+                        name: "pennylane",
+                        command: pennylane.command,
+                        args: pennylane.args,
+                        env: acpEnv(pennylane.env),
+                    });
+                }
+                const googleWorkspace = turn.integrations?.googleWorkspace;
+                if (googleWorkspace) {
+                    servers.push({
+                        name: "google_workspace",
+                        command: googleWorkspace.command,
+                        args: googleWorkspace.args,
+                        env: acpEnv(googleWorkspace.env),
+                    });
+                }
+                const memory = turn.integrations?.memory;
+                if (memory) {
+                    servers.push({
+                        name: "pi_memory",
+                        command: memory.command,
+                        args: memory.args,
+                        env: acpEnv(memory.env),
+                    });
+                }
                 // The bot's computer, mounted exactly like the Claude driver does.
                 // Cloud boxes use the REST adapter; host and sandbox Cua connections
                 // expose Cua Driver's official MCP server directly.
@@ -460,7 +487,7 @@ export function createAcpDriver(support) {
                 snapshot,
                 adapter: {
                     provider: DRIVER_KIND,
-                    capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, computerMcp: true },
+                    capabilities: { sessionModelSwitch: "unsupported", stdioMcp: true, agentsMcp: true, computerMcp: true },
                     sendTurn,
                     interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
                     respondToRequest: async (threadId, requestId, decision) => {

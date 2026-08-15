@@ -157,6 +157,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
       stop: () => void;
+      steer: (text: string) => Promise<{ accepted: boolean; reason?: string }>;
       turnId: string;
       asks: Map<string, (behavior: string, message?: string) => void>;
     }
@@ -221,6 +222,23 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           });
           send({ jsonrpc: "2.0", id, method, params });
         });
+
+      let codexThreadId: string | null = null;
+      let codexTurnId: string | null = null;
+      const steer = async (text: string) => {
+        if (!codexThreadId) return { accepted: false, reason: "Codex has not started its thread yet." };
+        if (!codexTurnId) return { accepted: false, reason: "Codex has not started its turn yet." };
+        try {
+          await request("turn/steer", {
+            threadId: codexThreadId,
+            expectedTurnId: codexTurnId,
+            input: [{ type: "text", text, text_elements: [] }],
+          });
+          return { accepted: true };
+        } catch (error) {
+          return { accepted: false, reason: error instanceof Error ? error.message : "Codex rejected steering." };
+        }
+      };
 
       const stop = () => killCliTree(child);
 
@@ -445,7 +463,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
       });
 
-      active.set(threadId, { stop, turnId, asks });
+      active.set(threadId, { stop, steer, turnId, asks });
       emit({ ...base(threadId, turnId), type: "turn.started" });
 
       // handshake + kickoff; any refusal surfaces as failure, not a hang
@@ -454,7 +472,6 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
           send({ jsonrpc: "2.0", method: "initialized", params: {} });
           const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
-          let codexThreadId: string | null = null;
           let startedModel: string | null = null;
           if (cursor) {
             try {
@@ -476,10 +493,11 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             startedModel = started?.model ?? null;
           }
           emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
-          await request("turn/start", {
+          const startedTurn = await request("turn/start", {
             threadId: codexThreadId,
             input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
           });
+          codexTurnId = startedTurn?.turn?.id ?? startedTurn?.id ?? null;
         } catch (e) {
           if (!state.settled) {
             emit({ ...base(threadId, turnId), type: "runtime.error", message: (e as Error).message });
@@ -518,9 +536,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           // in the UI, but never attach This Mac merely because a bot omitted
           // its destination setting.
           implicitHostComputer: false,
+          steering: true,
         },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
+        steerTurn: async (threadId, _turnId, text) =>
+          active.get(threadId)?.steer(text) ?? { accepted: false, reason: "No active Codex turn." },
         respondToRequest: async (threadId, requestId, decision) => {
           const turn = active.get(threadId);
           const finish = turn?.asks.get(requestId);

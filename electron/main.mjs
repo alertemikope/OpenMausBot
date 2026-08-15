@@ -14,6 +14,11 @@ import {
 } from "./wake-word.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
+import {
+  attachChatGptOAuthBroker,
+  ChatGptOAuthManager,
+  registerChatGptOAuthIpc,
+} from "./chatgpt-oauth.mjs";
 import capabilitiesModule from "./capabilities.cjs";
 
 const { desktopCapabilities } = capabilitiesModule;
@@ -37,6 +42,7 @@ if (process.platform === "linux") app.setDesktopName("com.openmausbot.app.deskto
 // our API shape, not just a 200).
 let serverProc = null;
 let serverReady = true;
+let chatGptOAuth = null;
 
 // The packaged app has no terminal: everything about the server child's life
 // goes to server.log in the OS log dir (~/Library/Logs/OpenMausBot on macOS,
@@ -69,6 +75,7 @@ async function startServerOn(port) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  if (chatGptOAuth) attachChatGptOAuthBroker(proc, chatGptOAuth);
   proc.stdout?.on("data", (d) => slog(`[out] ${String(d).trimEnd()}`));
   proc.stderr?.on("data", (d) => slog(`[err] ${String(d).trimEnd()}`));
   proc.once("spawn", () => slog(`spawned pid=${proc.pid}`));
@@ -311,6 +318,8 @@ ipcMain.handle("desktop:capabilities", async () =>
 );
 
 app.whenReady().then(async () => {
+  chatGptOAuth = new ChatGptOAuthManager();
+  registerChatGptOAuthIpc(chatGptOAuth);
   if (process.platform === "darwin") app.dock.setIcon(APP_ICON);
   // getDisplayMedia in the renderer → this handler → ScreenCaptureKit, all
   // inside the app's own processes — the one capture path macOS reliably

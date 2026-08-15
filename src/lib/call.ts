@@ -8,9 +8,13 @@
 // two would deadlock over the speaker otherwise.
 import { useSyncExternalStore } from "react";
 
-import { speaker } from "./tts";
+import { initialRealtimeCall, reduceRealtimeCall, type RealtimeCallAction, type RealtimeCallState } from "./realtime-call/state";
 
-let current: string | null = null;
+type CallRequest = { targetId: string; generation: number; initialText?: string };
+
+let state: RealtimeCallState = initialRealtimeCall;
+let request: CallRequest | null = null;
+let generation = 0;
 const watchers = new Set<() => void>();
 
 function notify() {
@@ -19,27 +23,44 @@ function notify() {
 
 /** The bot or room on a call, or null. Safe to read outside React. */
 export function currentCall(): string | null {
-  return current;
+  return "targetId" in state ? (state.targetId ?? null) : null;
 }
 
-export function startCall(targetId: string) {
-  if (current === targetId) return;
+export function currentCallRequest(): CallRequest | null { return request; }
+
+export function currentCallState(): RealtimeCallState { return state; }
+
+export function updateCall(action: RealtimeCallAction): void {
+  const next = reduceRealtimeCall(state, action);
+  if (next === state) return;
+  state = next;
+  notify();
+}
+
+export function startCall(targetId: string, options?: { initialText?: string }) {
+  if (currentCall() === targetId) return;
   // Switching calls must silence both halves before ownership changes; the
   // old overlay may not unmount until React's next render.
-  speaker.stop();
   void window.ogb?.speechStop();
   void window.ogb?.wakeSetCallActive?.(true);
-  current = targetId;
+  const nextGeneration = ++generation;
+  request = {
+    targetId,
+    generation: nextGeneration,
+    ...(options?.initialText?.trim() ? { initialText: options.initialText.trim() } : {}),
+  };
+  state = reduceRealtimeCall(state, { type: "authorize", targetId, generation: nextGeneration });
   notify();
 }
 
 /** End the current call. A targetId makes cleanup ownership-safe: an async
  * teardown from call A cannot hang up a newer call B. */
 export function endCall(targetId?: string): boolean {
+  const current = currentCall();
   if (targetId && current !== targetId) return false;
   if (current === null) return false;
-  current = null;
-  speaker.stop();
+  request = null;
+  state = { type: "idle", generation: ++generation };
   void window.ogb?.speechStop();
   void window.ogb?.wakeSetCallActive?.(false);
   notify();
@@ -61,7 +82,18 @@ export function useOnCall(): string | null {
       watchers.add(fn);
       return () => watchers.delete(fn);
     },
-    () => current,
-    () => current,
+    currentCall,
+    currentCall,
+  );
+}
+
+export function useCallState(): RealtimeCallState {
+  return useSyncExternalStore(
+    (fn) => {
+      watchers.add(fn);
+      return () => watchers.delete(fn);
+    },
+    currentCallState,
+    currentCallState,
   );
 }

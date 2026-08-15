@@ -5,12 +5,60 @@ conversation temps réel bidirectionnelle utilisant `gpt-live-1-codex` avec
 l'authentification OAuth ChatGPT, puis les évolutions nécessaires pour faire
 d'OpenMausBot un assistant de type Jarvis sans remplacer son harness d'agents.
 
+> **État courant — 15 août 2026, après implémentation.** Les sections 0.1 à
+> 0.7 conservent le dossier historique d'avant chantier pour l'audit. Elles ne
+> décrivent plus l'état du code. Le runtime installé est désormais
+> full-duplex WebRTC, OAuth ChatGPT chiffré, GPT-Live-first avec fallback
+> abonnement `gpt-realtime-2.1`, délégation vers le bot sélectionné, contrôle
+> continu, confirmations liées au `requestId`, wake Kenpachi et interface
+> accessible. ElevenLabs et le chemin d'appel half-duplex ont été retirés.
+
+### Statut de livraison actuel
+
+| Milestone | Statut | Preuve principale |
+| --- | --- | --- |
+| 1 — Conversation temps réel | terminé | appel installé connecté, audio bidirectionnel, sous-titres et barge-in |
+| 2 — AgentConsult | terminé | délégation réelle à Luna Max et résultat reparlé par la couche vocale |
+| 3 — Contrôle continu | terminé côté code et tests | status, steer, follow-up et cancel liés à la session vocale et au tour actif |
+| 4 — Approbations | terminé côté code et tests | confirmation exacte, expiration et propriété `threadId`/`requestId` |
+| 5 — Kenpachi/UX | terminé côté code | handoff unique, réarmement, overlay, AT-SPI et application macOS installée |
+| 6 — Retrait legacy | terminé | aucune clé ElevenLabs requise ; TTS ponctuel local macOS seulement |
+
+Recette live du 15 août 2026 sur l'application réellement installée :
+
+- connexion `gpt-realtime-2.1` OAuth/WebRTC, audio entrant et sortant ;
+- tâche non destructive longue avec statut réel (`sleep 60`, outil et durée) ;
+- steering Codex accepté avec `expectedTurnId` exact ;
+- follow-up conservé pendant la tâche puis exécuté dans le même bot ;
+- annulation résolvant proprement la tâche et la commande de contrôle, sans
+  double `response.create` ni erreur fournisseur ;
+- smoke test vocal strictement en lecture seule de Gmail, Google Drive et
+  Pennylane : `CONNECTORS_OK` ;
+- fermeture de session propre et réarmement du listener Kenpachi.
+
+La capture acoustique du wake word ne peut pas être automatisée avec `say` :
+macOS ne reboucle pas sa sortie système vers l'entrée microphone. Le helper
+signé, sa configuration `Salut Kenpachi`, son processus d'écoute et le handoff
+logiciel sont validés ; la toute dernière recette acoustique exige simplement
+que l'utilisateur prononce la phrase devant le Mac.
+
+Le seul écart fournisseur est explicite : le compte OAuth courant reçoit
+`Voice session access denied` pour `gpt-live-1-codex` et
+`gpt-live-1-boulder-alpha`. Le même abonnement accepte `gpt-realtime-2.1`.
+OpenMausBot tente donc GPT-Live en premier et ne bascule vers GA Realtime que
+sur ce 403 précis, sans clé API Platform ni fallback payant silencieux.
+Ce comportement est cohérent avec l'issue OpenClaw
+[#104683](https://github.com/openclaw/openclaw/issues/104683) : GPT-Live est
+WebRTC-only, son API reste soumise à entitlement, sa session full-duplex ne
+doit pas recevoir les réglages VAD de GA Realtime, et `gpt-realtime-2.1` reste
+le chemin disponible avant ouverture de l'accès GPT-Live.
+
 ## 0. Dossier de reprise pour une nouvelle session IA
 
 Cette section est le point d'entrée opérationnel. Une nouvelle session doit la
 lire entièrement, puis lire le reste de ce document avant d'écrire du code.
 
-### 0.1 Prompt de démarrage recommandé
+### 0.1 Prompt de démarrage historique (ne plus utiliser tel quel)
 
 Le bloc suivant peut être donné tel quel à une nouvelle session :
 
@@ -67,7 +115,7 @@ un livrable macOS : pnpm package:mac, installation réelle et test de
 THIRD_PARTY_NOTICES.md.
 ```
 
-### 0.2 État vérifié au 15 août 2026
+### 0.2 État historique vérifié avant implémentation
 
 | Élément | État |
 | --- | --- |
@@ -251,7 +299,7 @@ sont dans les vues d'appel et devront être remplacées par un contrôleur lié 
   `release/OpenMausBot-0.1.17-arm64.zip`.
 - Le packaging macOS avec helper Speech et Cua Driver a déjà réussi.
 
-### 0.6 Ce qui n'est pas encore fait
+### 0.6 Lacunes historiques au démarrage (désormais traitées)
 
 Il n'existe actuellement dans OpenMausBot :
 
@@ -1035,38 +1083,38 @@ audio brut n'est conservé.
 
 ## 15. Ordre de livraison
 
-### Milestone 1 — Conversation GPT-Live
+### Milestone 1 — Conversation GPT-Live — TERMINÉ
 
 OAuth, WebRTC, full-duplex, barge-in et sous-titres, sans délégation.
 
 **Gate :** conversation naturelle sans ElevenLabs.
 
-### Milestone 2 — AgentConsult
+### Milestone 2 — AgentConsult — TERMINÉ
 
 `delegation.created`, bot sélectionné, EventBus, résultat speakable et MCP.
 
 **Gate :** une demande vocale offre les mêmes capacités qu'une demande texte.
 
-### Milestone 3 — Contrôle continu
+### Milestone 3 — Contrôle continu — TERMINÉ
 
 Status, cancel, follow-up, steering selon le driver et progression silencieuse.
 
 **Gate :** une tâche longue reste pilotable sans quitter l'appel.
 
-### Milestone 4 — Sécurité et approbations
+### Milestone 4 — Sécurité et approbations — TERMINÉ
 
 Confirmation exacte, expiration, liaison au `requestId` et tests sensibles.
 
 **Gate :** aucune phrase ambiguë ne déclenche une action à impact.
 
-### Milestone 5 — Kenpachi et expérience complète
+### Milestone 5 — Kenpachi et expérience complète — TERMINÉ CÔTÉ CODE
 
 Wake vers GPT-Live, commande unique, réarmement, overlay, AT-SPI et packaging.
 
 **Gate :** parcours complet réveil → travail → interruption → confirmation →
 résultat → raccrochage.
 
-### Milestone 6 — Suppression du legacy
+### Milestone 6 — Suppression du legacy — TERMINÉ
 
 Retrait ElevenLabs, retrait half-duplex, documentation, installation propre et
 test depuis `/Applications/OpenMausBot.app`.

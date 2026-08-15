@@ -142,9 +142,17 @@ export interface ProviderAdapter {
      * safer for engines such as Codex: capability does not imply consent to
      * attach the user's Mac to every new bot automatically. */
     implicitHostComputer?: boolean;
+    /** Native in-flight redirection. Absence means the driver must report
+     * steering as unsupported; cancel/restart is never an equivalent. */
+    steering?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;
+  steerTurn?(
+    threadId: ThreadId,
+    turnId: TurnId,
+    text: string,
+  ): Promise<{ accepted: boolean; reason?: string }>;
   respondToRequest(
     threadId: ThreadId,
     requestId: string,

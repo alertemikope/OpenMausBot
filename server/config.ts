@@ -19,9 +19,6 @@ export interface AppConfig {
    * stdio server. Readonly defaults true unless explicitly disabled. */
   pennylane?: { token?: string; command?: string; baseUrl?: string; readonly?: boolean; api2026?: boolean };
   box?: { token?: string };
-  /** Voice (ElevenLabs). `key` is the credential and is never echoed back;
-   * `voice` is the chosen voice id, which is a setting, not a secret. */
-  tts?: { key?: string; voice?: string };
   /** The person using the app (collected in onboarding, shown in the
    * sidebar). Not a secret — echoed back by GET /api/config. */
   profile?: { name?: string; email?: string };
@@ -51,6 +48,12 @@ export function loadConfig(): AppConfig {
   let cfg: AppConfig = {};
   try {
     cfg = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+    // GPT-Live replaced hosted TTS. Remove the retired credential at its
+    // single persistence owner rather than leaving a dormant secret behind.
+    if (Object.hasOwn(cfg, "tts")) {
+      delete (cfg as Record<string, unknown>).tts;
+      writeFileAtomic(join(DATA_DIR, "config.json"), JSON.stringify(cfg, null, 2));
+    }
   } catch {
     /* first run — env fallbacks below */
   }
@@ -62,7 +65,6 @@ export function loadConfig(): AppConfig {
     ...cfg.pennylane,
   };
   cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
-  cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
   return cfg;
 }
 
@@ -76,7 +78,7 @@ export function saveConfig(patch: Partial<AppConfig>): void {
   } catch {
     /* first write */
   }
-  for (const key of ["xai", "composio", "pennylane", "box", "tts", "profile"] as const) {
+  for (const key of ["xai", "composio", "pennylane", "box", "profile"] as const) {
     if (patch[key] && typeof patch[key] === "object") {
       disk[key] = { ...(disk[key] as object), ...patch[key] };
     }

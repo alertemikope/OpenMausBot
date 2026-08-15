@@ -58,6 +58,11 @@ declare global {
       wakeResumeTrigger?(): Promise<WakeWordState>;
       onWakeState?(cb: (state: WakeWordState) => void): () => void;
       onWakeCommand?(cb: (command: { text: string; phrase: string }) => void): () => void;
+      chatgptOAuth?: {
+        status(): Promise<ChatGptOAuthStatus>;
+        connect(): Promise<ChatGptOAuthStatus>;
+        disconnect(): Promise<ChatGptOAuthStatus>;
+      };
       /** Absolute path of a dropped File ("" when the drag carried no
        * file on disk). Absent in older builds of the shell. */
       getPathForFile?(file: File): string;
@@ -90,4 +95,11 @@ export interface UpdaterState {
   version?: string;
   percent?: number;
   message?: string;
+}
+
+export interface ChatGptOAuthStatus {
+  authenticated: boolean;
+  account: "ChatGPT";
+  model: "gpt-live-1-codex";
+  error?: string;
 }

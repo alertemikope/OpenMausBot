@@ -103,6 +103,24 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(turnStart.params.input[0].text).toBe("You are Testy.\n\nlist files");
   });
 
+  it("steers the exact active Codex turn with the current app-server contract", async () => {
+    await create({ mode: "steering" });
+    const dump = join(scratch, "steering-dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-steer", text: "start long work" });
+    await recorder.until((event) => event.type === "item.started");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await expect(instance.adapter.steerTurn?.("t-steer", turnId, "focus only July"))
+      .resolves.toEqual({ accepted: true });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.calls.find((call: { method: string }) => call.method === "turn/steer")?.params).toEqual({
+      threadId: "codex-thread-1",
+      expectedTurnId: "codex-turn-1",
+      input: [{ type: "text", text: "focus only July", text_elements: [] }],
+    });
+  });
+
   it("mounts Composio without exposing its key in argv", async () => {
     await create();
     const dump = join(scratch, "dump.json");

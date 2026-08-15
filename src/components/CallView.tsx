@@ -1,44 +1,35 @@
-// Call mode — the bot on the line.
-//
-// The loop is deliberately HALF-DUPLEX: the microphone is live only when
-// the bot is not speaking. The dictation helper is Apple's SFSpeechRecognizer
-// running on raw AVAudioEngine input with no acoustic echo cancellation, so
-// a mic left open through playback transcribes the bot's own voice back into
-// the conversation and the two of them talk forever. Interrupting is a tap
-// or Escape instead, which is honest and cannot feed back. (Full-duplex
-// barge-in needs AEC on the capture path — a follow-up, not a footnote.)
-//
-// Turn-taking uses a small silence endpointer in the native helper. Apple's
-// buffer-backed recognizer does not finalize on silence by itself: the helper
-// has to end the audio stream, which then produces the final transcript.
-//
-// The other half of making a call bearable is narration. An agent turn is
-// 5-60 seconds of tool calls; silence that long reads as a dropped call. So
-// every activity chip the harness narrates (`tool.spoken`) is read aloud as
-// it happens, which is why waiting feels like listening to someone work
-// rather than listening to nothing.
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Loader2, Phone, PhoneOff, X } from "lucide-react";
+import { Captions, Loader2, Mic, MicOff, Phone, PhoneOff, VolumeX, X } from "lucide-react";
 
+import { track } from "@/lib/analytics";
+import {
+  currentCallRequest,
+  endCall,
+  startCall,
+  updateCall,
+  useCallState,
+  useOnCall,
+} from "@/lib/call";
+import { cn } from "@/lib/cn";
+import { RealtimeCallController } from "@/lib/realtime-call/controller";
 import { useStore, visibleMessages, type Bot } from "@/state/store";
-import { currentCall, deferCallCleanup, endCall, startCall, useOnCall } from "@/lib/call";
-import { speaker } from "@/lib/tts";
-import { useSpeech } from "@/lib/tts/useSpeech";
-import { usePushToTalk } from "@/lib/push-to-talk";
 import { MausAvatar } from "./Avatar";
 import { pendingApprovals } from "./PendingApproval";
-import { cn } from "@/lib/cn";
-import { track } from "@/lib/analytics";
-import { useDesktopCapabilities } from "./DesktopCapabilities";
 
-/** Spoken answers to a permission card. Anything else is read as a reply
- * to the bot, not as consent — an approval must never be granted by a
- * sentence that merely contained the word "sure". */
-const YES = /^(yes|yeah|yep|yup|sure|ok|okay|go ahead|do it|allow|approve|approved|fine|please do)\b/i;
-const NO = /^(no|nope|don'?t|do not|stop|deny|denied|cancel|never|skip it)\b/i;
+const VOICES = ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"];
 
-type Phase = "listening" | "sending" | "working" | "speaking";
-const CALL_ENDPOINT_MS = 850;
+function voicePreference(): string {
+  const value = localStorage.getItem("openmaus.realtime.voice") ?? "marin";
+  return VOICES.includes(value) ? value : "marin";
+}
+
+function languagePreference(): string {
+  return (localStorage.getItem("openmaus.realtime.language") ?? "fr-FR").slice(0, 32);
+}
+
+function microphonePreference(): string | undefined {
+  return localStorage.getItem("openmaus.realtime.microphone") || undefined;
+}
 
 export function CallButton({ bot }: { bot: Bot }) {
   return (
@@ -46,7 +37,7 @@ export function CallButton({ bot }: { bot: Bot }) {
       targetId={bot.id}
       targetName={bot.name}
       voices={[bot.voice]}
-      onStart={() => track("call_started", { driver: bot.modelSelection?.instanceId })}
+      onStart={() => track("call_started", { driver: bot.modelSelection?.instanceId, engine: "gpt-live" })}
     />
   );
 }
@@ -54,7 +45,6 @@ export function CallButton({ bot }: { bot: Bot }) {
 export function CallTargetButton({
   targetId,
   targetName,
-  voices,
   onStart,
 }: {
   targetId: string;
@@ -62,116 +52,75 @@ export function CallTargetButton({
   voices: Array<string | undefined>;
   onStart: () => void;
 }) {
-  const { state, dispatch } = useStore();
-  const { capabilities, ready: capabilitiesReady } = useDesktopCapabilities();
+  const { dispatch } = useStore();
   const active = useOnCall() === targetId;
-  const supported = capabilities.dictation.available && Boolean(window.ogb?.speechStart);
-  const configured = Boolean(state.config?.tts?.configured);
-  const voiceReady =
-    configured && Boolean(state.config?.tts?.ready || (voices.length > 0 && voices.every((voice) => Boolean(voice))));
-  const unavailable = !active && (!capabilitiesReady || !supported || !voiceReady);
-  const voiceSetupRequired = capabilitiesReady && supported && !voiceReady;
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
   const helpId = useId();
-  const label = active
-    ? `Hang up on ${targetName}`
-    : !capabilitiesReady
-      ? "Checking call availability"
-      : !supported
-        ? "Calls currently need the macOS desktop app"
-        : !configured
-          ? "Add an ElevenLabs key in App Settings to make calls"
-          : !voiceReady
-            ? "Pick a voice in App Settings to make calls"
-            : `Call ${targetName}`;
-
-  const reason = !capabilitiesReady
-    ? "Checking whether this device can make calls."
-    : !capabilities.dictation.available
-      ? "Calls require OpenMausBot for macOS because speech recognition runs on-device."
-      : !window.ogb?.speechStart
-        ? "The speech service is unavailable in this app build. Restart or update OpenMausBot."
-        : !configured
-          ? "Add an ElevenLabs API key so the bot can speak during calls."
-          : !voiceReady
-            ? voices.length > 1
-              ? "Choose an app voice, or give every room member their own ElevenLabs voice."
-              : "Choose an ElevenLabs voice before starting a call."
-            : "";
 
   useEffect(() => {
-    if (!helpOpen) return;
-    const closeOnOutsideClick = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setHelpOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setHelpOpen(false);
-      buttonRef.current?.focus();
-    };
-    document.addEventListener("pointerdown", closeOnOutsideClick);
-    document.addEventListener("keydown", closeOnEscape);
+    let alive = true;
+    const bridge = window.ogb?.chatgptOAuth;
+    if (!bridge) {
+      setAuthenticated(false);
+      return;
+    }
+    void bridge.status().then((status) => alive && setAuthenticated(status.authenticated)).catch(() => alive && setAuthenticated(false));
+    const refresh = () => void bridge.status().then((status) => alive && setAuthenticated(status.authenticated));
+    window.addEventListener("openmaus:oauth-changed", refresh);
     return () => {
-      document.removeEventListener("pointerdown", closeOnOutsideClick);
-      document.removeEventListener("keydown", closeOnEscape);
+      alive = false;
+      window.removeEventListener("openmaus:oauth-changed", refresh);
     };
-  }, [helpOpen]);
+  }, []);
+
+  const unavailable = !active && authenticated !== true;
+  const label = active
+    ? `Hang up on ${targetName}`
+    : authenticated === null
+      ? "Checking ChatGPT voice availability"
+      : authenticated
+        ? `Call ${targetName}`
+        : "Connect ChatGPT in Voice settings to make calls";
 
   return (
-    <div ref={rootRef} className="relative">
+    <div className="relative">
       <button
-        ref={buttonRef}
+        type="button"
         onClick={() => {
           if (active) return endCall(targetId);
-          if (unavailable) {
-            setHelpOpen((open) => !open);
-            return;
-          }
+          if (unavailable) return setHelpOpen((open) => !open);
           onStart();
           startCall(targetId);
         }}
+        aria-label={label}
         aria-expanded={unavailable ? helpOpen : undefined}
         aria-controls={unavailable ? helpId : undefined}
-        aria-label={label}
         title={label}
         className={cn(
           "relative flex size-9 items-center justify-center rounded-full transition-colors",
-          active
-            ? "bg-danger text-white hover:brightness-110"
-            : unavailable
-              ? "text-ink-secondary/50 hover:bg-raised hover:text-ink-secondary"
-              : "text-ink-secondary hover:bg-raised hover:text-ink",
+          active ? "bg-danger text-white" : unavailable ? "text-ink-secondary/50 hover:bg-raised" : "text-ink-secondary hover:bg-raised hover:text-ink",
         )}
       >
         {active ? <PhoneOff size={17} /> : <Phone size={17} />}
-        {unavailable && (
-          <span className="absolute right-1 top-1 size-1.5 rounded-full bg-warning ring-2 ring-app" aria-hidden="true" />
-        )}
+        {unavailable && <span className="absolute right-1 top-1 size-1.5 rounded-full bg-warning ring-2 ring-app" aria-hidden="true" />}
       </button>
-
       {unavailable && helpOpen && (
-        <div
-          id={helpId}
-          role="group"
-          aria-label="Call unavailable"
-          className="animate-pop-in absolute right-0 z-30 mt-1.5 w-[280px] rounded-xl border border-hairline bg-panel p-3 text-left shadow-2xl"
-        >
-          <div className="text-[13px] font-medium text-ink">Call unavailable</div>
-          <div className="mt-1 text-[12px] leading-[1.45] text-ink-secondary">{reason}</div>
-          {voiceSetupRequired && (
-            <button
-              type="button"
-              onClick={() => {
-                setHelpOpen(false);
-                dispatch({ type: "toggleAppSettings", open: true, section: "voice" });
-              }}
-              className="mt-2.5 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:brightness-110"
-            >
-              Open Voice settings
-            </button>
-          )}
+        <div id={helpId} role="group" aria-label="Call unavailable" className="absolute right-0 z-30 mt-1.5 w-[280px] rounded-xl border border-hairline bg-panel p-3 shadow-2xl">
+          <div className="text-[13px] font-medium text-ink">ChatGPT voice is not connected</div>
+          <div className="mt-1 text-[12px] leading-relaxed text-ink-secondary">
+            Realtime calls use your ChatGPT subscription through encrypted OAuth. No OpenAI API key or ElevenLabs account is used.
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setHelpOpen(false);
+              dispatch({ type: "toggleAppSettings", open: true, section: "voice" });
+            }}
+            className="mt-2.5 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white"
+          >
+            Open Voice settings
+          </button>
         </div>
       )}
     </div>
@@ -180,364 +129,180 @@ export function CallTargetButton({
 
 export function CallOverlay({ bot }: { bot: Bot }) {
   const active = useOnCall() === bot.id;
-  if (!active) return null;
-  return <Call bot={bot} />;
+  return active ? <RealtimeCall bot={bot} /> : null;
 }
 
-function Call({ bot }: { bot: Bot }) {
+function RealtimeCall({ bot }: { bot: Bot }) {
   const { dispatch } = useStore();
-  const speech = useSpeech();
-  const initialPhase: Phase = bot.busy ? "working" : "listening";
-  const [phase, setPhase] = useState<Phase>(initialPhase);
-  const [heard, setHeard] = useState("");
-  const [note, setNote] = useState<string | null>(null);
-  const pushToTalk = usePushToTalk(bot.id, phase === "listening", () => {
-    setNote("Push to talk couldn't start. Check Microphone and Speech Recognition access.");
-  });
+  const state = useCallState();
+  const request = currentCallRequest();
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const controllerRef = useRef<RealtimeCallController | null>(null);
+  const alive = useRef(true);
+  const fallbackSent = useRef(false);
+  const [muted, setMuted] = useState(false);
+  const [captions, setCaptions] = useState(true);
+  const [userCaption, setUserCaption] = useState("");
+  const [assistantCaption, setAssistantCaption] = useState("");
 
   const messages = visibleMessages(bot);
   const approval = pendingApprovals(messages)[0];
-  const question = messages.find(
-    (message) =>
-      message.kind === "options" &&
-      message.card?.requestId &&
-      !message.card.tool &&
-      !message.card.answered &&
-      !message.card.dismissed,
-  );
+  const currentTool = [...messages].reverse().find((message) => message.kind === "activity" && message.tool)?.tool?.name;
 
-  // Everything already on screen when the call starts has been read or
-  // ignored — a call must not open by reciting the backlog.
-  const spokenIds = useRef<Set<string>>(new Set());
-  const started = useRef(false);
-  if (!started.current) {
-    started.current = true;
-    for (const m of messages) spokenIds.current.add(m.id);
-  }
-
-  // the approval we last asked about aloud, so a card that stays open
-  // while the user thinks is not re-read every render
-  const askedApproval = useRef<string | null>(null);
-  const askedQuestion = useRef<{ requestId: string; messageId: string } | null>(null);
-  const phaseRef = useRef<Phase>(initialPhase);
-  const alive = useRef(true);
-  const sayGeneration = useRef(0);
-
-  /** Change the rendered phase and the synchronous phase used by native
-   * callbacks together. React state alone is too late: the helper can exit
-   * in the same tick as a final transcript or an intentional mute. */
-  const move = useCallback((next: Phase) => {
-    phaseRef.current = next;
-    if (alive.current) setPhase(next);
-  }, []);
-
-  const hush = useCallback(() => {
-    void window.ogb?.speechStop();
-  }, []);
-
-  const listen = useCallback(() => {
-    if (!alive.current || currentCall() !== bot.id) return;
-    move("listening");
-    setHeard("");
-    setNote(null);
-    void window.ogb?.speechStart({ endpointMs: CALL_ENDPOINT_MS }).catch(() => {
-      if (alive.current && currentCall() === bot.id) {
-        setNote("The microphone couldn't start. Check Microphone and Speech Recognition access.");
-      }
-    });
-  }, [bot.id, move]);
-
-  /** Speak, with the microphone closed for the duration (see the header
-   * comment — an open mic during playback is a feedback loop). */
-  const say = useCallback(
-    async (text: string) => {
-      if (!alive.current || currentCall() !== bot.id) return false;
-      const mine = ++sayGeneration.current;
-      // Move first. stopSpeech() finishes asynchronously, and its close must
-      // never observe an old "listening" phase and reopen the mic.
-      move("speaking");
-      hush();
-      await speaker.speak(text, { botId: bot.id, voiceId: bot.voice });
-      return alive.current && currentCall() === bot.id && sayGeneration.current === mine;
-    },
-    [bot.id, bot.voice, hush, move],
-  );
-
-  const sayThenListen = useCallback(
-    async (text: string) => {
-      const stillMine = await say(text);
-      if (stillMine && phaseRef.current === "speaking") listen();
-    },
-    [listen, say],
-  );
-
-  // Navigating away from this bot hangs up. Without ownership checking, the
-  // overlay disappeared but `currentCall()` remained set and auto-speak was
-  // permanently disabled for a call nobody could see.
   useEffect(() => {
     alive.current = true;
+    if (!request || request.targetId !== bot.id || !audioRef.current) return;
+    if (!controllerRef.current) {
+      const outputId = localStorage.getItem("openmaus.realtime.output");
+      const audioWithSink = audioRef.current as HTMLAudioElement & { setSinkId?: (deviceId: string) => Promise<void> };
+      if (outputId && audioWithSink.setSinkId) void audioWithSink.setSinkId(outputId).catch(() => {});
+      const controller = new RealtimeCallController({
+        targetId: bot.id,
+        generation: request.generation,
+        audio: audioRef.current,
+        voice: VOICES.includes(bot.voice ?? "") ? bot.voice : voicePreference(),
+        language: languagePreference(),
+        initialText: request.initialText,
+        deviceId: microphonePreference(),
+        onState: updateCall,
+        onCaption: (role, text) => {
+          if (role === "user") setUserCaption(text);
+          else setAssistantCaption(text);
+        },
+        onInitialFallback: (text) => {
+          if (fallbackSent.current) return;
+          fallbackSent.current = true;
+          dispatch({ type: "send", botId: bot.id, text });
+        },
+      });
+      controllerRef.current = controller;
+      void controller.start();
+    }
     return () => {
       alive.current = false;
-      sayGeneration.current += 1;
-      // StrictMode immediately remounts effects once in development. A
-      // microtask distinguishes that probe from real navigation: the probe
-      // has set alive=true again before this runs; a genuine unmount has not.
-      deferCallCleanup(bot.id, () => alive.current);
-    };
-  }, [bot.id]);
-
-  // ── the microphone ───────────────────────────────────────────────────
-  useEffect(() => {
-    const bridge = window.ogb;
-    if (!bridge) return;
-    const offTranscript = bridge.onSpeechTranscript((line) => {
-      if (!alive.current || currentCall() !== bot.id || phaseRef.current !== "listening") return;
-      if (line.error) {
-        setNote("Dictation stopped unexpectedly. Check Microphone and Speech Recognition access.");
-        return;
-      }
-      if (typeof line.text !== "string") return;
-      setHeard(line.text);
-      if (line.partial !== false) return;
-      // final result — Apple's recognizer decided the turn ended
-      const said = line.text.trim();
-      if (!said) return listen();
-
-      const open = askedApproval.current;
-      if (open) {
-        if (YES.test(said) || NO.test(said)) {
-          const allow = YES.test(said);
-          askedApproval.current = null;
-          dispatch({
-            type: "decideRequest",
-            threadId: bot.threadId,
-            requestId: open,
-            behavior: allow ? "allow" : "deny",
-            message: allow ? undefined : "Denied by the user, on a call.",
-          });
-          move("working");
-          return;
-        }
-        // not a decision — leave the card up and say so rather than
-        // guessing consent from an ambiguous sentence
-        void sayThenListen("Sorry — is that a yes or a no?");
-        return;
-      }
-
-      const openQuestion = askedQuestion.current;
-      if (openQuestion) {
-        askedQuestion.current = null;
-        dispatch({ type: "answerCard", botId: bot.id, messageId: openQuestion.messageId, answer: said });
-        move("working");
-        return;
-      }
-
-      move("sending");
-      dispatch({ type: "send", botId: bot.id, text: said });
-    });
-    const offEnd = bridge.onSpeechEnd(({ code, reason }) => {
-      if (!alive.current || currentCall() !== bot.id) return;
-      if (code === 2) {
-        setNote("Calls need macOS dictation, which isn't available here yet.");
-        return;
-      }
-      if (code === 1) {
-        setNote(
-          reason === "helper-build-failed"
-            ? "The dictation helper couldn't be built. Install Apple's Command Line Tools and try again."
-            : "Dictation needs Microphone + Speech Recognition access in System Settings.",
-        );
-        return;
-      }
-      // the helper exits after every final result; if we are still meant
-      // to be listening, that means the user's turn ended — start the next
-      if (phaseRef.current === "listening") listen();
-    });
-    if (bot.busy && !approval && !question) move("working");
-    else listen();
-    return () => {
-      offTranscript();
-      offEnd();
-      void window.ogb?.speechStop();
-    };
-    // busy/approval are intentionally initial snapshots. Their live changes
-    // are handled below without tearing down native event listeners.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bot.id, bot.threadId, dispatch, listen, move, sayThenListen]);
-
-  // ── narrate the work, speak the answer, read the approvals ───────────
-  useEffect(() => {
-    // The request may be resolved from the normal approval UI or by another
-    // client while this call is open. Do not keep treating future speech as
-    // an answer to a card that no longer exists.
-    if (askedApproval.current && approval?.requestId !== askedApproval.current) {
-      askedApproval.current = null;
-    }
-    if (askedQuestion.current && question?.card?.requestId !== askedQuestion.current.requestId) {
-      askedQuestion.current = null;
-    }
-    if (!approval && !question && bot.busy && phaseRef.current === "listening") {
-      move("working");
-      hush();
-    }
-    if (approval && askedApproval.current !== approval.requestId && phase !== "speaking") {
-      askedApproval.current = approval.requestId;
-      spokenIds.current.add(approval.message.id);
-      void sayThenListen(`${bot.name} wants to ${approval.tool}. ${approval.detail}. Should I allow it?`);
-      return;
-    }
-    if (
-      question?.card?.requestId &&
-      askedQuestion.current?.requestId !== question.card.requestId &&
-      phase !== "speaking"
-    ) {
-      askedQuestion.current = { requestId: question.card.requestId, messageId: question.id };
-      spokenIds.current.add(question.id);
-      const detail = question.card.subtitle.trim();
-      const choices = question.card.options.length
-        ? ` The options are ${question.card.options.join(", ")}.`
-        : "";
-      void sayThenListen(`${bot.name} asks: ${detail}${/[.!?]$/.test(detail) ? "" : "."}${choices}`);
-      return;
-    }
-    const fresh = messages.filter((m) => !spokenIds.current.has(m.id));
-    if (!fresh.length) return;
-    // only the newest of each kind matters: a burst of tool chips should
-    // not queue thirty seconds of narration behind the actual answer
-    const reply = [...fresh].reverse().find((m) => m.role === "bot" && m.kind === "text" && m.text?.trim());
-    const chip = [...fresh].reverse().find((m) => m.kind === "activity" && m.tool?.spoken);
-    for (const m of fresh) spokenIds.current.add(m.id);
-
-    if (reply?.text) {
-      void sayThenListen(reply.text);
-    } else if (chip?.tool?.spoken && phase === "working") {
-      void say(chip.tool.spoken).then((stillMine) => {
-        if (stillMine && phaseRef.current === "speaking") move("working");
+      queueMicrotask(() => {
+        if (alive.current) return;
+        const controller = controllerRef.current;
+        controllerRef.current = null;
+        void controller?.close();
       });
-    }
-  }, [messages, approval, question, phase, bot.busy, bot.name, hush, move, say, sayThenListen]);
+    };
+  }, [bot.id, bot.voice, dispatch, request]);
 
-  // busy is the harness's word for "a turn is running"
   useEffect(() => {
-    if (bot.busy) {
-      // An open approval deliberately keeps the mic live for yes/no. Every
-      // other busy phase is half-duplex and must close capture.
-      if (phaseRef.current !== "speaking" && !askedApproval.current && !askedQuestion.current) {
-        move("working");
-        hush();
-      }
-    } else if (
-      phaseRef.current === "working" &&
-      !askedApproval.current &&
-      !askedQuestion.current &&
-      !speaker.isSpeaking()
-    ) {
-      // A failed/cancelled turn may have no reply to trigger the normal
-      // speak-then-listen path. Recover the call instead of staying stuck.
-      listen();
-    }
-  }, [bot.busy, hush, listen, move]);
-
-  // Escape hangs up; space interrupts whatever is being said
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
         endCall(bot.id);
-      } else if (e.code === "Space" && speaker.isSpeaking()) {
-        e.preventDefault();
-        sayGeneration.current += 1;
-        speaker.stop();
-        listen();
+      } else if (event.code === "Space" && state.type === "live" && state.phase === "speaking") {
+        event.preventDefault();
+        controllerRef.current?.interruptVoice();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [bot.id, listen]);
+  }, [bot.id, state]);
 
-  const mascotState =
-    phase === "listening" ? "listening" : phase === "speaking" ? "sending" : phase === "sending" ? "thinking" : "working";
-  const status =
-    phase === "listening"
-      ? pushToTalk
-        ? "Push to talk"
-        : "Listening"
-      : phase === "sending"
-        ? "One moment"
-        : phase === "speaking"
-          ? bot.name
-          : "Working";
+  const toggleMute = useCallback(() => {
+    const next = !muted;
+    setMuted(next);
+    controllerRef.current?.setMuted(next);
+  }, [muted]);
+
+  const phase = state.type === "live"
+    ? approval
+      ? "awaiting-approval"
+      : bot.busy && state.phase === "listening"
+        ? "working"
+        : state.phase
+    : state.type;
+  const status: Record<string, string> = {
+    authorizing: "Authorizing",
+    connecting: "Connecting",
+    listening: "Listening",
+    hearing: "Hearing you",
+    speaking: "Speaking",
+    working: "Working",
+    "awaiting-approval": "Awaiting approval",
+    reconnecting: "Reconnecting",
+    muted: "Muted",
+    failed: "Failed",
+  };
+  const caption = phase === "hearing" ? userCaption : assistantCaption;
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-6 bg-app/95 backdrop-blur-sm">
-      <button
-        onClick={() => endCall(bot.id)}
-        aria-label="Hang up"
-        className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised hover:text-ink"
-      >
+    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-5 bg-app/95 px-8 backdrop-blur-sm" role="dialog" aria-label={`Jarvis call with ${bot.name}`}>
+      <audio ref={audioRef} autoPlay aria-hidden="true" />
+      <button type="button" onClick={() => endCall(bot.id)} aria-label="Hang up" className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised">
         <X size={18} />
       </button>
 
-      <MausAvatar color={bot.color} state={mascotState} size={220} animated trackPointer />
-
-      <div className="flex flex-col items-center gap-1.5 text-center">
+      <MausAvatar color={bot.color} state={phase === "listening" || phase === "hearing" ? "listening" : phase === "speaking" ? "sending" : "working"} size={220} animated trackPointer />
+      <div className="text-center">
         <div className="text-[20px] font-medium text-ink">{bot.name}</div>
-        <div className="flex items-center gap-2 text-[13.5px] text-ink-secondary">
-          {(phase === "working" || phase === "sending") && <Loader2 size={13} className="animate-spin" />}
-          {status}
+        <div className="mt-1 flex items-center justify-center gap-2 text-[13.5px] text-ink-secondary" aria-live="polite">
+          {["authorizing", "connecting", "working", "reconnecting"].includes(phase) && <Loader2 size={13} className="animate-spin" />}
+          {status[phase] ?? "Jarvis"}
         </div>
-      </div>
-
-      {/* one line, whichever is current: what you're saying, or what it is */}
-      <div className="min-h-[3.5rem] max-w-[560px] px-6 text-center text-[15px] leading-relaxed text-ink">
-        {phase === "listening" ? (
-          heard || (
-            <span className="text-ink-secondary">
-              {pushToTalk ? "Release Control + Option to send…" : "Say something…"}
-            </span>
-          )
-        ) : (
-          speech.caption
+        <div className={cn("mt-1 text-[11px]", state.type === "live" && !muted ? "text-success" : "text-ink-secondary")}>
+          {state.type === "live" && !muted ? "Microphone transmitting to ChatGPT Realtime" : muted ? "Microphone transmission paused" : "Microphone not transmitting"}
+        </div>
+        {(state.type === "live" || state.type === "reconnecting") && state.model && (
+          <div className="mt-1 text-[10.5px] text-ink-secondary/75" aria-label="Realtime transport">
+            {state.transport === "gpt-live" ? "GPT-Live" : "ChatGPT subscription fallback"}
+            {` · ${state.model}`}
+            {typeof state.latencyMs === "number" ? ` · ${state.latencyMs} ms` : ""}
+          </div>
         )}
       </div>
 
-      {note && (
-        <div className="flex max-w-[460px] flex-col items-center gap-2 text-center text-[12.5px] text-warning">
-          <span>{note}</span>
-          <button
-            onClick={listen}
-            className="rounded-full border border-warning/40 px-3 py-1.5 text-[12px] hover:bg-warning/10"
-          >
-            Try microphone again
-          </button>
+      <div className="min-h-[4rem] max-w-[620px] text-center text-[15px] leading-relaxed text-ink" aria-live="polite">
+        {state.type === "failed" ? (
+          <span className="text-danger">{state.message}</span>
+        ) : captions && caption ? (
+          caption
+        ) : (
+          <span className="text-ink-secondary">{muted ? "Microphone muted" : "Speak naturally — you can interrupt the voice at any time."}</span>
+        )}
+      </div>
+
+      {(currentTool || approval) && (
+        <div className="flex items-center gap-3 rounded-full bg-raised px-3 py-1.5 text-[12px] text-ink-secondary" aria-label="Current agent activity">
+          <span>{approval ? `Approval: ${approval.detail}` : `Current tool: ${currentTool}`}</span>
+          {approval && (
+            <button
+              type="button"
+              aria-label="Deny the pending approval"
+              onClick={() => dispatch({
+                type: "decideRequest",
+                threadId: bot.threadId,
+                requestId: approval.requestId,
+                behavior: "deny",
+                message: "Denied by the user from the Jarvis overlay.",
+              })}
+              className="rounded-full border border-danger/40 px-2 py-0.5 text-danger hover:bg-danger/10"
+            >
+              Deny
+            </button>
+          )}
         </div>
       )}
-      {speech.error && <div className="max-w-[420px] text-center text-[12.5px] text-danger">{speech.error}</div>}
 
-      <div className="flex items-center gap-3">
-        {speaker.isSpeaking() && (
-          <button
-            onClick={() => {
-              sayGeneration.current += 1;
-              speaker.stop();
-              listen();
-            }}
-            className="rounded-full border border-hairline/50 px-4 py-2 text-[13.5px] text-ink hover:bg-raised"
-          >
-            Interrupt
-          </button>
-        )}
-        <button
-          onClick={() => endCall(bot.id)}
-          className="flex items-center gap-2 rounded-full bg-danger px-5 py-2.5 text-[14px] font-medium text-white hover:brightness-110"
-        >
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        <button type="button" onClick={toggleMute} aria-label={muted ? "Unmute microphone" : "Mute microphone"} className="flex items-center gap-2 rounded-full border border-hairline/50 px-4 py-2 text-[13px] text-ink hover:bg-raised">
+          {muted ? <MicOff size={15} /> : <Mic size={15} />} {muted ? "Unmute" : "Mute"}
+        </button>
+        <button type="button" onClick={() => controllerRef.current?.interruptVoice()} aria-label="Interrupt Jarvis voice only" className="flex items-center gap-2 rounded-full border border-hairline/50 px-4 py-2 text-[13px] text-ink hover:bg-raised">
+          <VolumeX size={15} /> Stop voice
+        </button>
+        <button type="button" onClick={() => setCaptions((value) => !value)} aria-label={captions ? "Hide captions" : "Show captions"} aria-pressed={captions} className="flex items-center gap-2 rounded-full border border-hairline/50 px-4 py-2 text-[13px] text-ink hover:bg-raised">
+          <Captions size={15} /> Captions
+        </button>
+        <button type="button" onClick={() => endCall(bot.id)} aria-label="Hang up call" className="flex items-center gap-2 rounded-full bg-danger px-5 py-2.5 text-[14px] font-medium text-white">
           <PhoneOff size={16} /> Hang up
         </button>
       </div>
-
-      <div className="text-[11.5px] text-ink-secondary/70">
-        Hold Control + Option to talk · Space interrupts · Esc hangs up
-      </div>
+      <div className="text-[11.5px] text-ink-secondary/70">Space stops Jarvis speaking · Esc hangs up · “Annule la tâche” cancels agent work</div>
     </div>
   );
 }

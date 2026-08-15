@@ -1,6 +1,5 @@
 import { ChevronLeft, Crown, X } from "lucide-react";
-import { useEffect, useState } from "react";
-import { api, useStore, type Bot } from "@/state/store";
+import { useStore, type Bot } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import {
   PICKABLE_STATES,
@@ -31,8 +30,7 @@ const inputCls =
 
 export function SettingsPanel({ bot }: { bot: Bot }) {
   const { state, dispatch } = useStore();
-  const [voices, setVoices] = useState<Array<{ id: string; label: string; description?: string }>>([]);
-  const [voicesLoading, setVoicesLoading] = useState(false);
+  const voices = ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"];
   const patch = (
     p: Partial<
       Pick<
@@ -56,22 +54,6 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
   const engine = state.instances.find((instance) => instance.instanceId === bot.modelSelection.instanceId);
   const canCoordinate = engine?.capabilities?.agentsMcp === true;
   const currentChief = state.bots.find((candidate) => candidate.chiefOfStaff);
-
-  useEffect(() => {
-    if (!state.config?.tts?.configured) {
-      setVoices([]);
-      return;
-    }
-    let alive = true;
-    setVoicesLoading(true);
-    api("/api/tts/voices")
-      .then((result: { voices?: typeof voices }) => alive && setVoices(result.voices ?? []))
-      .catch(() => alive && setVoices([]))
-      .finally(() => alive && setVoicesLoading(false));
-    return () => {
-      alive = false;
-    };
-  }, [state.config?.tts?.configured]);
 
   return (
     <aside className="animate-panel-in flex h-full w-[400px] shrink-0 flex-col border-l border-hairline/40 bg-panel">
@@ -293,8 +275,7 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
             </button>
           </div>
 
-          {state.config?.tts?.configured && (
-            <div className="rounded-xl bg-card p-4">
+          <div className="rounded-xl bg-card p-4">
               <div className="text-[15px] font-medium text-ink">Bot voice</div>
               <div className="mt-0.5 text-[13px] text-ink-secondary">
                 Use a distinct voice for calls and spoken replies, or inherit the app default
@@ -306,18 +287,14 @@ export function SettingsPanel({ bot }: { bot: Bot }) {
                 className="mt-3 w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink focus:border-hairline focus:outline-none"
               >
                 <option value="">App default</option>
-                {bot.voice && !voices.some((voice) => voice.id === bot.voice) && (
+                {bot.voice && !voices.includes(bot.voice) && (
                   <option value={bot.voice}>Current bot voice</option>
                 )}
                 {voices.map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.label}{voice.description ? ` — ${voice.description}` : ""}
-                  </option>
+                  <option key={voice} value={voice}>{voice}</option>
                 ))}
               </select>
-              {voicesLoading && <div className="mt-1.5 text-[11.5px] text-ink-secondary">Loading voices…</div>}
             </div>
-          )}
 
           <div className="flex items-center justify-between gap-4 rounded-xl bg-card p-4">
             <div>

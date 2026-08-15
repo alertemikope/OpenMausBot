@@ -10,6 +10,10 @@
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
 import { homedir } from "node:os";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { computerProxyEnv } from "../container-computer.js";
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.js";
 import { newEventId, newId } from "../contracts.js";
 import { augmentedPath } from "../env-path.js";
@@ -33,6 +37,57 @@ function decodeConfig(raw) {
 }
 const QUESTION_TIMEOUT_NOTE = "No answer was given — use your best judgment.";
 const DENY_TIMEOUT_NOTE = "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
+const COMPOSIO_KEY_ENV = "OPENMAUSBOT_COMPOSIO_KEY";
+const COMPUTER_PROXY_PATH = (() => {
+    const ts = join(dirname(fileURLToPath(import.meta.url)), "..", "computer-proxy.ts");
+    return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
+})();
+/** Add one stdio MCP server to Codex without putting credentials in argv.
+ * env_vars tells Codex which inherited variables to forward to that server. */
+function appendStdioMcp(args, env, name, server) {
+    Object.assign(env, server.env);
+    args.push("-c", `mcp_servers.${name}.command=${JSON.stringify(server.command)}`, "-c", `mcp_servers.${name}.args=${JSON.stringify(server.args)}`, "-c", `mcp_servers.${name}.env_vars=${JSON.stringify(Object.keys(server.env))}`);
+}
+/** Codex app-server inherits the user's normal MCP config, but OpenMausBot's
+ * Composio credential is app-owned and intentionally absent from that file.
+ * Add a per-process MCP override and pass the secret through an environment
+ * header reference so it never appears in argv or Codex's config on disk. */
+function appServerArgs(turn, env) {
+    const args = [];
+    const composio = turn.integrations?.composio;
+    if (composio?.key) {
+        env[COMPOSIO_KEY_ENV] = composio.key;
+        const url = composio.url || "https://connect.composio.dev/mcp";
+        args.push("-c", `mcp_servers.composio.url=${JSON.stringify(url)}`, "-c", `mcp_servers.composio.env_http_headers={\"x-consumer-api-key\"=\"${COMPOSIO_KEY_ENV}\"}`);
+    }
+    const pennylane = turn.integrations?.pennylane;
+    if (pennylane) {
+        appendStdioMcp(args, env, "pennylane", pennylane);
+    }
+    const googleWorkspace = turn.integrations?.googleWorkspace;
+    if (googleWorkspace) {
+        appendStdioMcp(args, env, "google_workspace", googleWorkspace);
+    }
+    const memory = turn.integrations?.memory;
+    if (memory) {
+        appendStdioMcp(args, env, "pi_memory", memory);
+    }
+    // Both explicit computer destinations use the same MCP name. A cloud box
+    // rides OpenMausBot's REST bridge; This Mac and Local VM hand Codex Cua
+    // Driver's official stdio MCP contract directly.
+    if (turn.integrations?.computer) {
+        appendStdioMcp(args, env, "computer", {
+            command: process.execPath,
+            args: [COMPUTER_PROXY_PATH],
+            env: { ELECTRON_RUN_AS_NODE: "1", ...computerProxyEnv(turn.integrations.computer) },
+        });
+    }
+    else if (turn.integrations?.localComputer) {
+        appendStdioMcp(args, env, "computer", turn.integrations.localComputer);
+    }
+    args.push("app-server");
+    return args;
+}
 export const CodexDriver = {
     driverKind: DRIVER_KIND,
     metadata: { displayName: "Codex", supportsMultipleInstances: true },
@@ -73,7 +128,7 @@ export const CodexDriver = {
             // the CLI owns its own ChatGPT login; a leaked API key silently flips
             // billing to pay-as-you-go (agentcal)
             delete env.OPENAI_API_KEY;
-            const child = spawnCli(config.cli, ["app-server"], {
+            const child = spawnCli(config.cli, appServerArgs(turn, env), {
                 cwd: turn.cwd ?? homedir(),
                 env,
                 stdio: ["pipe", "pipe", "pipe"],
@@ -111,6 +166,25 @@ export const CodexDriver = {
                 });
                 send({ jsonrpc: "2.0", id, method, params });
             });
+            let codexThreadId = null;
+            let codexTurnId = null;
+            const steer = async (text) => {
+                if (!codexThreadId)
+                    return { accepted: false, reason: "Codex has not started its thread yet." };
+                if (!codexTurnId)
+                    return { accepted: false, reason: "Codex has not started its turn yet." };
+                try {
+                    await request("turn/steer", {
+                        threadId: codexThreadId,
+                        expectedTurnId: codexTurnId,
+                        input: [{ type: "text", text, text_elements: [] }],
+                    });
+                    return { accepted: true };
+                }
+                catch (error) {
+                    return { accepted: false, reason: error instanceof Error ? error.message : "Codex rejected steering." };
+                }
+            };
             const stop = () => killCliTree(child);
             const settle = (ok, stopReason) => {
                 if (state.settled)
@@ -130,13 +204,21 @@ export const CodexDriver = {
                 const method = msg.method;
                 const params = msg.params ?? {};
                 const legacy = method === "execCommandApproval" || method === "applyPatchApproval";
-                const isQuestion = method === "item/tool/requestUserInput";
+                const isMcpElicitation = method === "mcpServer/elicitation/request";
+                const isMcpApproval = isMcpElicitation && params._meta?.codex_approval_kind === "mcp_tool_call";
+                const isQuestion = method === "item/tool/requestUserInput" || (isMcpElicitation && !isMcpApproval);
+                const mcpTool = typeof params.message === "string" ? params.message.match(/run tool ["“]([^"”]+)["”]/i)?.[1] : undefined;
                 const tool = method === "item/fileChange/requestApproval" || method === "applyPatchApproval"
                     ? "edit"
-                    : isQuestion
-                        ? "ask_user"
-                        : "shell";
+                    : isMcpApproval
+                        ? `mcp:${params.serverName || "server"}/${mcpTool || "tool"}`
+                        : isQuestion
+                            ? "ask_user"
+                            : "shell";
                 if (config.fullAuto && !isQuestion) {
+                    if (isMcpApproval) {
+                        return send({ jsonrpc: "2.0", id: msg.id, result: { action: "accept", content: {}, _meta: null } });
+                    }
                     return send({ jsonrpc: "2.0", id: msg.id, result: { decision: legacy ? "approved" : "accept" } });
                 }
                 const requestId = newId();
@@ -144,9 +226,11 @@ export const CodexDriver = {
                     ? params.command.slice(0, 200)
                     : Array.isArray(params.questions)
                         ? params.questions.map((q) => q.question ?? q.header).filter(Boolean).join(" · ")
-                        : typeof params.reason === "string"
-                            ? params.reason
-                            : tool;
+                        : typeof params.message === "string"
+                            ? params.message.slice(0, 300)
+                            : typeof params.reason === "string"
+                                ? params.reason
+                                : tool;
                 const choices = isQuestion
                     ? (params.questions?.[0]?.options ?? []).map((o) => o.label).slice(0, 5)
                     : undefined;
@@ -162,11 +246,10 @@ export const CodexDriver = {
                         send({ jsonrpc: "2.0", id: msg.id, result: { answers } });
                     }
                     else {
-                        send({
-                            jsonrpc: "2.0",
-                            id: msg.id,
-                            result: { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" },
-                        });
+                        const result = isMcpApproval
+                            ? { action: behavior === "allow" ? "accept" : "decline", content: behavior === "allow" ? {} : null, _meta: null }
+                            : { decision: behavior === "allow" ? (legacy ? "approved" : "accept") : legacy ? "denied" : "decline" };
+                        send({ jsonrpc: "2.0", id: msg.id, result });
                     }
                     emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source: "user" });
                 };
@@ -327,7 +410,7 @@ export const CodexDriver = {
                     settle(false, "exit_before_result");
                 }
             });
-            active.set(threadId, { stop, turnId, asks });
+            active.set(threadId, { stop, steer, turnId, asks });
             emit({ ...base(threadId, turnId), type: "turn.started" });
             // handshake + kickoff; any refusal surfaces as failure, not a hang
             (async () => {
@@ -335,7 +418,6 @@ export const CodexDriver = {
                     await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
                     send({ jsonrpc: "2.0", method: "initialized", params: {} });
                     const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
-                    let codexThreadId = null;
                     let startedModel = null;
                     if (cursor) {
                         try {
@@ -358,10 +440,11 @@ export const CodexDriver = {
                         startedModel = started?.model ?? null;
                     }
                     emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
-                    await request("turn/start", {
+                    const startedTurn = await request("turn/start", {
                         threadId: codexThreadId,
                         input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
                     });
+                    codexTurnId = startedTurn?.turn?.id ?? startedTurn?.id ?? null;
                 }
                 catch (e) {
                     if (!state.settled) {
@@ -389,9 +472,19 @@ export const CodexDriver = {
             snapshot,
             adapter: {
                 provider: DRIVER_KIND,
-                capabilities: { sessionModelSwitch: "unsupported" },
+                capabilities: {
+                    sessionModelSwitch: "unsupported",
+                    stdioMcp: true,
+                    computerMcp: true,
+                    // Access to the host Mac is powerful. Expose both explicit choices
+                    // in the UI, but never attach This Mac merely because a bot omitted
+                    // its destination setting.
+                    implicitHostComputer: false,
+                    steering: true,
+                },
                 sendTurn,
                 interruptTurn: async (threadId) => active.get(threadId)?.stop(),
+                steerTurn: async (threadId, _turnId, text) => active.get(threadId)?.steer(text) ?? { accepted: false, reason: "No active Codex turn." },
                 respondToRequest: async (threadId, requestId, decision) => {
                     const turn = active.get(threadId);
                     const finish = turn?.asks.get(requestId);

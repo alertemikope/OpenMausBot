@@ -103,6 +103,40 @@ describe("harness HTTP API", () => {
     expect(body.static).toBe(true);
   });
 
+  it("brokers one-shot realtime offers without exposing OAuth", async () => {
+    const bots = await api("GET", "/api/bots");
+    const targetId = bots.body.bots[0].id;
+    const created = await api("POST", "/api/realtime/sessions", { targetId, voice: "marin" });
+    expect(created.status).toBe(201);
+    expect(created.body.sessionId).toMatch(/^voice-/);
+    expect(Buffer.from(created.body.offerToken, "base64url")).toHaveLength(32);
+    expect(JSON.stringify(created.body)).not.toMatch(/oauth|access.?token|chatgpt-account-id/i);
+
+    const second = await api("POST", "/api/realtime/sessions", { targetId });
+    expect(second.status).toBe(409);
+
+    const offer = await fetch(`${BASE}/api/realtime/offers`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${created.body.offerToken}`,
+        "content-type": "application/sdp",
+      },
+      body: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\na=sendrecv\r\n",
+    });
+    expect(offer.status).toBe(500);
+    expect(await offer.json()).toEqual({ error: "ChatGPT OAuth is available in the OpenMausBot desktop app" });
+
+    const replay = await fetch(`${BASE}/api/realtime/offers`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${created.body.offerToken}`,
+        "content-type": "application/sdp",
+      },
+      body: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
+    });
+    expect(replay.status).toBe(401);
+  });
+
   it("serves packaged UI assets and preserves API 404s", async () => {
     const root = await fetch(`${BASE}/`);
     expect(root.status).toBe(200);

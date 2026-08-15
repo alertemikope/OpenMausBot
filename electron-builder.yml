@@ -43,6 +43,9 @@ extraResources:
     to: server
 
 mac:
+  # Local/private builds still need a complete sealed bundle (rather than
+  # Electron's linker-only signature) so deep verification and TCC are stable.
+  identity: "-"
   target:
     - target: dmg
       arch: arm64

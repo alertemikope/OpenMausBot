@@ -2,15 +2,14 @@ import { Loader2, Square, Volume2 } from "lucide-react";
 
 import { speaker } from "@/lib/tts";
 import { useSpeech } from "@/lib/tts/useSpeech";
-import { useStore } from "@/state/store";
 import { cn } from "@/lib/cn";
 
 /** Read one message aloud. Hover-revealed beside the copy control, and it
  * becomes a stop button while this message is the one speaking — the same
  * button, because "speak" and "shut up" are the same intent twice.
  *
- * Without a key it stays visible but disabled, saying what it needs: a
- * hidden button is a feature nobody discovers. */
+ * This uses the operating-system voice, not the GPT-Live call or a hosted
+ * TTS service. */
 export function SpeakButton({
   text,
   botId,
@@ -24,14 +23,13 @@ export function SpeakButton({
   voiceId?: string;
   className?: string;
 }) {
-  const { state } = useStore();
   const speech = useSpeech();
-  const ready = Boolean(state.config?.tts?.ready);
+  const ready = typeof window !== "undefined" && "speechSynthesis" in window;
   const mine = speech.messageId === messageId && speech.status !== "idle";
   const preparing = mine && speech.status === "preparing";
 
   const label = !ready
-    ? "Add an ElevenLabs key in App Settings to read messages aloud"
+    ? "System speech is unavailable"
     : mine
       ? "Stop speaking"
       : "Read this aloud";

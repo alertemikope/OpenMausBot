@@ -1,5 +1,6 @@
 // Config + data dirs. One file, ~/.openmausbot/config.json, env fallbacks:
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
+//     "pennylane": {"token":"…", "readonly":false},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
 import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
@@ -28,14 +29,24 @@ export function loadConfig() {
     let cfg = {};
     try {
         cfg = JSON.parse(readFileSync(join(DATA_DIR, "config.json"), "utf8"));
+        // GPT-Live replaced hosted TTS. Remove the retired credential at its
+        // single persistence owner rather than leaving a dormant secret behind.
+        if (Object.hasOwn(cfg, "tts")) {
+            delete cfg.tts;
+            writeFileAtomic(join(DATA_DIR, "config.json"), JSON.stringify(cfg, null, 2));
+        }
     }
     catch {
         /* first run — env fallbacks below */
     }
     cfg.xai = { key: process.env.XAI_API_KEY, ...cfg.xai };
     cfg.composio = { key: process.env.COMPOSIO_KEY, ...cfg.composio };
+    cfg.pennylane = {
+        token: process.env.PENNYLANE_API_KEY,
+        baseUrl: process.env.PENNYLANE_BASE_URL,
+        ...cfg.pennylane,
+    };
     cfg.box = { token: process.env.BOX_TOKEN, ...cfg.box };
-    cfg.tts = { key: process.env.OMB_TTS_KEY, ...cfg.tts };
     return cfg;
 }
 /** Merge a partial config into ~/.openmausbot/config.json (secrets never
@@ -49,7 +60,7 @@ export function saveConfig(patch) {
     catch {
         /* first write */
     }
-    for (const key of ["xai", "composio", "box", "tts", "profile"]) {
+    for (const key of ["xai", "composio", "pennylane", "box", "profile"]) {
         if (patch[key] && typeof patch[key] === "object") {
             disk[key] = { ...disk[key], ...patch[key] };
         }
@@ -79,6 +90,7 @@ export function instanceConfigs(cfg) {
         ? cfg.instances
         : {
             grok: { driver: "grokAgent" },
+            kimi: { driver: "kimiAgent" },
             claude: { driver: "claudeAgent" },
             codex: { driver: "codex" },
             antigravity: { driver: "antigravityAgent" },

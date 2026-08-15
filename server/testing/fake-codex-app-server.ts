@@ -4,7 +4,7 @@
 // initialize/thread/turn handshake, then plays a scripted turn. Like the
 // real app-server, it never exits on its own — the driver kills it.
 //
-//   FAKE_CODEX_MODE   happy (default) | approval | mcp-approval | resume | stream
+//   FAKE_CODEX_MODE   happy (default) | approval | mcp-approval | resume | stream | steering
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -78,9 +78,11 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
         break;
       case "turn/start":
-        out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
+        out({ jsonrpc: "2.0", id: msg.id, result: mode === "steering" ? { turn: { id: "codex-turn-1" } } : { ok: true } });
         notify("item/started", { item: { id: "i1", type: "commandExecution", command: "ls -la" } });
-        if (mode === "approval") {
+        if (mode === "steering") {
+          // Remain active until the test sends turn/steer.
+        } else if (mode === "approval") {
           out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: "rm -rf scratch" } });
           // turn continues from the approval response handler above
         } else if (mode === "mcp-approval") {
@@ -99,6 +101,20 @@ process.stdin.on("data", (chunk) => {
         } else {
           finishTurn();
         }
+        break;
+      case "turn/steer":
+        if (mode !== "steering") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no active turn" } });
+          break;
+        }
+        if (msg.params?.expectedTurnId !== "codex-turn-1") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "wrong expectedTurnId" } });
+          break;
+        }
+        out({ jsonrpc: "2.0", id: msg.id, result: { accepted: true } });
+        dump();
+        notify("item/completed", { item: { id: "a-steer", type: "agentMessage", text: "steered" } });
+        notify("turn/completed", { turn: { id: "codex-turn-1", status: "completed" } });
         break;
       default:
         if (msg.id !== undefined) out({ jsonrpc: "2.0", id: msg.id, result: {} });

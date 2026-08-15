@@ -1,166 +1,119 @@
-# Voice in OpenMausBot
+# Jarvis realtime voice
 
-Decision doc, 2026-08-14. How bots speak, and how you hold a conversation with
-one.
+Decision doc, updated 2026-08-15. OpenMausBot calls are full-duplex WebRTC
+sessions through ChatGPT OAuth. They prefer `gpt-live-1-codex`; accounts for
+which GPT-Live is not enabled automatically use `gpt-realtime-2.1` on the same
+subscription OAuth profile, never a paid Platform-key fallback.
 
-## Shape
+OpenClaw issue [#104683](https://github.com/openclaw/openclaw/issues/104683)
+documents the same provider boundary: GPT-Live requires WebRTC and an
+early-access entitlement, while GA Realtime remains available when that gate
+returns `Voice session access denied`. GPT-Live receives no `server_vad`
+configuration; only the GA fallback does.
 
-```
-Renderer (src/)                        Harness (server/)
-├── lib/tts/index.ts   the speaker     ├── tts/speech-text.ts  markdown → speakable
-│     queue · prefetch · interrupt     └── tts/elevenlabs.ts   verify · voices · synthesize
-└── components/CallView.tsx
-      Apple STT endpointing            POST /api/tts/prepare → utterances
-                                       POST /api/tts/speak   → mp3 bytes
-```
+## Ownership
 
-One voice provider: **ElevenLabs, bring your own key**. No local model, no
-second provider, no fallback ladder — if there is no key, voice is off and the
-buttons say so.
-
-## Why the key stays on the harness
-
-The renderer never talks to ElevenLabs. `GET /api/config` reports
-configured-or-not booleans and nothing else, which is the same rule every other
-credential follows, and it is worth more than a saved round trip. So the app
-asks the harness for audio and the harness holds the key.
-
-Two states worth distinguishing, because they need different instructions:
-`configured` (a key is saved) and `ready` (a key *and* a chosen voice). Speaking
-without either throws `NoVoiceConfigured`, which the route turns into a 409 —
-"you haven't set this up" is not a provider failure and should not look like one.
-
-## The spoken register
-
-The half that decides whether this is pleasant. Agents write for a screen:
-fenced code, file paths, tables, link soup. Read aloud verbatim, a diff is four
-minutes of punctuation and `server/drivers/acp/core.ts` is "server slash drivers
-slash a c p slash core dot t s".
-
-`speech-text.ts` says the prose, names the artifacts, drops the syntax. It also
-splits into utterances, because that is the unit of work — one request, one clip,
-and the client fetches the next while the current one plays. One request per
-utterance rather than the streaming-input WebSocket: same perceived latency, far
-fewer moving parts, and no socket to leak when a turn is interrupted.
-
-## Call mode
-
-**Half-duplex, on purpose.** The dictation helper is `SFSpeechRecognizer` on raw
-`AVAudioEngine` input with no acoustic echo cancellation. A microphone left open
-through playback transcribes the bot's own voice back into the conversation and
-the two of them talk forever. So the mic is live only when the bot is not
-speaking, and interrupting is a tap, the Space bar, or Escape. Full-duplex
-barge-in needs AEC on the capture path — a real follow-up, not a footnote.
-
-**Turn detection stays native and local.** A buffer-backed
-`SFSpeechRecognizer` does not emit `isFinal` just because the speaker becomes
-quiet; it finalizes only after its audio stream ends. Call mode therefore starts
-the native helper with a silence timeout. Once a non-empty transcript stops
-changing for 850ms, the helper stops capture and calls `endAudio()`, which
-produces the final transcript sent to the renderer. Composer dictation omits the
-timeout and keeps its press-to-stop behavior. No cloud STT or bundled VAD model
-is involved.
-
-**Narration is what makes it bearable.** An agent turn is 5–60 seconds of tool
-calls, and silence that long reads as a dropped call. Every activity chip the
-harness narrates is read aloud as it happens. The phrase is computed once,
-server-side, into `tool.spoken` at fold time — so the chip you see and the phrase
-you hear cannot drift apart.
-
-**Approvals are spoken.** A `request.opened` card is read out and answered with
-"yes"/"no". Anything that is not clearly a decision is refused and re-asked:
-consent must never be inferred from a sentence that merely contained the word
-"sure". Non-permission questions are read too, and the next complete spoken
-turn is returned as the answer, so an agent asking for input does not strand the
-call behind an invisible card.
-
-**Latency, honestly.** Endpointing is 300–700ms and time-to-first-byte is
-~100–250ms, against an agent turn of 5–60s. The agent dominates by 50–100x, so
-voice choice is a quality decision, not a latency one. The way to make a call
-feel conversational is to put the bot you call on a fast model and let it
-delegate real work to specialists over `ask_bot` — no new machinery required.
-
-## Wake word
-
-The macOS desktop can optionally keep the same signed Apple Speech helper in a
-passive, on-device mode. The default phrase is **“Kenpachi”** and the feature is
-off until the user enables it in App Settings.
-
-```
-“Kenpachi” → short pause → command
-                         ↓
-             selected bot/room call
-                         ↓
-              existing agent + tools
+```text
+Kenpachi (local Apple Speech, macOS only)
+  -> renderer WebRTC audio + oai-events data channel
+  -> harness /api/realtime broker
+  -> api.openai.com/v1/live + authenticated sideband (preferred)
+     or /v1/realtime/calls?model=gpt-realtime-2.1 (subscription fallback)
+  -> selected bot through sideband or the credential-free local event bridge
+  -> selected OpenMaus bot through the normal startTurn owner
 ```
 
-There is deliberately no second agent behind the listener. Electron receives
-only the completed text command, opens the existing call surface, and sends it
-through the normal harness. The selected bot therefore keeps its Codex/Claude
-session, MCPs, approvals, Google/Pennylane access, shared Pi memory, computer
-and voice.
+GPT-Live is the conversational surface, not the agent. It receives no MCP or
+computer tools. A `delegation.created` event is executed by the selected bot
+through its existing thread, model, persona, approvals, Gmail/Drive,
+Pennylane, Pi Memory, CUA and `ask_bot` integrations. The result returns on a
+bounded `speakable` channel; tool progress returns as silent `commentary`.
 
-The listener releases the microphone as soon as it recognizes a command. It is
-suspended while dictation or a call owns capture, then rearmed after hang-up.
-Three consecutive helper failures stop automatic restart and surface a visible
-error instead of spinning in the background.
+## OAuth and secrets
 
-The phrase/gap design is adapted from OpenClaw's `SwabbleKit` and macOS voice
-wake implementation under the MIT License. Attribution is in
-`THIRD_PARTY_NOTICES.md`.
+Voice settings starts Authorization Code + PKCE against `auth.openai.com`.
+The callback binds to `localhost:1455`. Electron encrypts the profile with
+`safeStorage` in a user-private file and refreshes it before expiry.
 
-## Reference projects
+The harness requests a temporary access token through Electron's private
+utility-process message channel. React sees only:
 
-- **OpenClaw** has the most complete realtime speech-to-speech and
-  agent-consult architecture. Its wake gate and lifecycle fit here; its full
-  gateway/plugin runtime does not. Realtime voice remains a separate optional
-  provider, not a replacement for the current harness.
-- **Hermes** validates the simpler wake → STT → same agent → TTS product shape.
-  Its Python wake backends are not bundled because Apple Speech already gives
-  the signed macOS app a dependency-free local path.
-- **Talkify** is useful as a reference for macOS 26+'s `SpeechAnalyzer`, warm
-  language models and tested dictation state machine. The current production
-  helper keeps `SFSpeechRecognizer` compatibility; migrating normal dictation
-  to `SpeechAnalyzer` should retain a fallback for older supported macOS.
-- **OpenJarvis** contributes scheduling, digest, monitoring and memory patterns.
-  OpenMausBot's routines and Chief of Staff already own scheduling and agent
-  delegation. Its existing Pi Memory Hub owns durable memory, with Obsidian as
-  the canonical store and Qdrant as a derived index, so those patterns extend
-  the existing owners rather than add a second runtime or database.
+```json
+{ "authenticated": true, "account": "ChatGPT", "model": "gpt-live-1-codex" }
+```
 
-## Rejected
+The browser receives a random 256-bit, one-shot offer token. The ChatGPT bearer
+is never returned by HTTP, placed in SDP, logged, or appended to a URL. There
+is no OpenAI Platform-key path and no silent paid fallback.
 
-| Option | Why not |
-| --- | --- |
-| OS voices (macOS/Windows) | Audibly synthetic; would cheapen the feature |
-| Piper | Same complaint, one tier up |
-| Kokoro-82M in the renderer | Genuinely good and free, but it is a second provider, a 2.2MB chunk, an ONNX runtime and a first-run model download. Simplicity won. |
-| Cartesia | Cheaper and faster to first byte, but a second provider earns its keep only once one is not enough |
-| ElevenLabs Agents | Its custom-LLM `cascade_timeout_seconds` maxes at 15s and agent turns exceed that; it also wants to own turn-taking and tool calls, which is what the harness owns |
-| Realtime speech model as the only brain | It would replace the local agent and its tools. A thin voice surface that delegates substantive work to the selected bot is the acceptable architecture. |
+## Session broker
 
-## Known gaps
+`POST /api/realtime/sessions` reserves one 30-minute window session. Its offer
+credential expires after 60 seconds. `POST /api/realtime/offers` accepts a
+bounded audio + `oai-events` SDP and consumes the credential before network
+work. It first creates the multipart call at `api.openai.com/v1/live`. A 403
+from that feature-gated model is the only condition that activates the raw-SDP
+`/v1/realtime/calls?model=gpt-realtime-2.1` fallback; both use the same ChatGPT
+OAuth bearer and `chatgpt-account-id`.
 
-- **Calls are macOS-only**, because dictation is. The voice half works everywhere.
-- **Rooms don't speak yet**, though per-bot voices already exist (`bot.voice`).
-- **No spend meter.** ElevenLabs bills per character. Auto-speak is off by
-  default partly for that reason, but the app should eventually show usage.
-- **No voice barge-in** — see half-duplex above.
-- The wake phrase is a local speech-text gate, not a dedicated low-power DSP
-  keyword model. A distinctive phrase and required pause reduce accidental
-  activation; environments with constant speech may prefer leaving it off.
-- OpenAI/Gemini realtime speech-to-speech is not yet exposed as an optional
-  call provider.
+GPT-Live keeps OAuth and delegation on the authenticated server sideband at
+`wss://api.openai.com/v1/live/<callId>`. GA Realtime carries an
+`agent_consult` function call over `oai-events`; the renderer relays bounded
+events over loopback HTTP and receives tool outputs over a session-owned SSE
+stream. `DELETE /api/realtime/sessions/:id` aborts setup, delegations, event
+transport and media ownership.
 
-## Failure boundaries
+The broker enforces loopback origins, one active window session, closed model
+and voice lists, bounded SDP/provider errors/events/transcripts and results,
+generation fencing and deterministic shutdown.
 
-- Intentional microphone stops (playback, hang-up, or replacement) do not emit
-  a natural `speech:end`; otherwise the renderer could reopen capture during
-  the bot's audio.
-- Call phases are updated synchronously alongside React state, so a helper exit
-  in the same event-loop turn as a final transcript cannot observe a stale
-  `listening` phase.
-- Leaving the bot view owns and ends its call. A hidden overlay cannot leave a
-  microphone session or a stale `currentCall` behind.
-- Synthesis requests are abortable from the renderer and individual utterances
-  are capped server-side to bound accidental hosted-voice spend.
+## Full-duplex behavior
+
+Chromium captures the microphone with echo cancellation, noise suppression and
+automatic gain control. The microphone remains open while GPT-Live speaks.
+Provider turn detection handles normal barge-in. The **Stop voice** control
+sends `response.cancel`; it never interrupts agent work.
+
+The distinct spoken controls are:
+
+- status: reports the real current tool, progress, duration or pending approval;
+- cancel: calls the provider's `interruptTurn`;
+- steer: uses a native primitive when available (Codex `turn/steer`); unsupported
+  engines say so without cancel/restart;
+- follow-up: waits for completion, then runs in the same bot thread.
+
+On the GA fallback, `agent_consult` carries an explicit `mode` enum so model
+paraphrasing cannot turn status into replacement work. GPT-Live uses an
+explicit control envelope in delegated text. Codex steering sends both the
+provider thread id and exact `expectedTurnId`. A cancellation resolves the
+original task call and the cancel-control call together before creating one
+new voice response; queued follow-ups remain pending until their real harness
+turn completes.
+
+## Confirmations
+
+Sensitive permission events are held by a server-side confirmation controller.
+Authority is bound to the exact `requestId`, thread, summary and expiry, is
+single-use, and is cleared on hang-up. Only a closed French/English grammar
+such as “Oui, je confirme” or “No, I deny” resolves it. Containment checks such
+as finding `oui` inside a longer sentence are forbidden and ambiguous answers
+cause the exact question to be repeated.
+
+## Kenpachi handoff
+
+The wake listener stays entirely local until it captures a wake phrase and
+first command. It then releases Apple Speech before WebRTC starts. That command
+is inserted once as GPT-Live initial context. If connection fails before the
+call becomes live, it is sent once through normal text chat, with no voice or
+paid fallback. Hang-up rearms the listener.
+
+Rooms do not expose a call button: one voice must have one turn/approval owner.
+Call a Chief of Staff bot and let its existing `ask_bot` tools coordinate the
+team instead of opening simultaneous speaking sessions.
+
+## Message playback
+
+The optional **Read aloud** button is separate from Jarvis. It uses the free
+operating-system `speechSynthesis` voice. The retired ElevenLabs key, routes,
+server implementation and billing copy were removed; startup deletes any
+dormant legacy `tts` credential from OpenMausBot's canonical config file.
