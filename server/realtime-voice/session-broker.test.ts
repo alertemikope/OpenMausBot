@@ -93,4 +93,28 @@ describe("realtime session broker", () => {
       vi.useRealTimers();
     }
   });
+
+  it("starts post-call extraction after close without waiting for it", async () => {
+    let finish!: () => void;
+    const process = vi.fn(() => new Promise<undefined>((resolve) => { finish = () => resolve(undefined); }));
+    const broker = new RealtimeSessionBroker({
+      targetExists: () => true,
+      oauth: { resolveAccess: vi.fn(async () => ({ accessToken: "test", accountId: "account" })) },
+      createCall: vi.fn(async () => ({ kind: "ga-realtime" as const, model: "gpt-realtime-2.1" as const, answerSdp: AUDIO_SDP })),
+      runAgentConsult: vi.fn(),
+      controlAgent: vi.fn(),
+      respondToRequest: vi.fn(),
+      callMemory: { process, review: vi.fn(async () => { throw new Error("not used"); }) },
+    });
+    const call = broker.createSession({ targetId: "bot-1" });
+    await broker.acceptOffer(call.offerToken, AUDIO_SDP);
+    broker.ingestEvent(call.sessionId, JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Je préfère les réponses courtes.",
+    }));
+
+    await expect(broker.closeSession(call.sessionId)).resolves.toBe(true);
+    await vi.waitFor(() => expect(process).toHaveBeenCalledWith(call.sessionId));
+    finish();
+  });
 });

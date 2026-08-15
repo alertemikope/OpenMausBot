@@ -20,6 +20,7 @@ export class VoiceTranscriptStore {
             }
             catch { /* surfaced on actual read/write */ }
         }
+        this.recoverInterruptedMemorySyncs();
     }
     save(input) {
         const entries = input.entries
@@ -28,8 +29,9 @@ export class VoiceTranscriptStore {
             .map((entry) => ({ ...entry, text: entry.text.replace(/\s+/g, " ").trim().slice(0, 8_000) }));
         if (!entries.length)
             return undefined;
-        const transcript = { ...input, version: 1, summary: summary(entries), entries };
+        const transcript = { ...input, version: 2, summary: summary(entries), entries };
         writeFileAtomic(join(this.directory, `${safeId(input.sessionId)}.json`), JSON.stringify(transcript, null, 2));
+        this.prune();
         return transcript;
     }
     get(sessionId) {
@@ -65,7 +67,23 @@ export class VoiceTranscriptStore {
         const calls = this.list(limit).filter((call) => call.summary);
         if (!calls.length)
             return "";
-        return calls.map((call) => `- ${new Date(call.startedAt).toISOString()}: ${call.summary}`).join("\n").slice(0, 1_500);
+        return calls.map((call) => {
+            const working = call.review?.workingState;
+            const context = [
+                ...(working?.decisions ?? []).slice(0, 2).map((item) => `decision: ${item.text}`),
+                ...(working?.commitments ?? []).slice(0, 2).map((item) => `commitment: ${item.text}`),
+                ...(working?.openQuestions ?? []).slice(0, 1).map((item) => `open question: ${item.text}`),
+            ].join("; ");
+            return `- ${new Date(call.startedAt).toISOString()}: ${call.summary}${context ? ` [${context}]` : ""}`;
+        }).join("\n").slice(0, 1_500);
+    }
+    updateReview(sessionId, review) {
+        const call = this.get(sessionId);
+        if (!call)
+            return undefined;
+        const updated = { ...call, version: 2, review };
+        writeFileAtomic(join(this.directory, `${safeId(sessionId)}.json`), JSON.stringify(updated, null, 2));
+        return updated;
     }
     remove(sessionId) {
         const id = safeId(sessionId);
@@ -86,5 +104,42 @@ export class VoiceTranscriptStore {
             if (this.remove(call.sessionId))
                 removed += 1;
         return removed;
+    }
+    prune(maxCalls = 100) {
+        let files = [];
+        try {
+            files = readdirSync(this.directory)
+                .filter((file) => file.endsWith(".json"))
+                .map((file) => {
+                try {
+                    const call = JSON.parse(readFileSync(join(this.directory, file), "utf8"));
+                    return { file, startedAt: typeof call.startedAt === "number" ? call.startedAt : 0 };
+                }
+                catch {
+                    return { file, startedAt: 0 };
+                }
+            });
+        }
+        catch {
+            return;
+        }
+        for (const entry of files.sort((left, right) => right.startedAt - left.startedAt).slice(maxCalls)) {
+            try {
+                rmSync(join(this.directory, entry.file));
+            }
+            catch { /* bounded best effort */ }
+        }
+    }
+    recoverInterruptedMemorySyncs() {
+        for (const call of this.list(100)) {
+            const syncing = call.review?.memoryCandidates.filter((candidate) => candidate.status === "syncing" && !candidate.syncError) ?? [];
+            if (!syncing.length || !call.review)
+                continue;
+            for (const candidate of syncing) {
+                candidate.syncError = "OpenMausBot restarted during this Pi Memory update. Verify canonical memory before retrying.";
+            }
+            call.review.updatedAt = Date.now();
+            writeFileAtomic(join(this.directory, `${safeId(call.sessionId)}.json`), JSON.stringify(call, null, 2));
+        }
     }
 }

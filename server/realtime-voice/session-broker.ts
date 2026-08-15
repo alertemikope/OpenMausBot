@@ -18,6 +18,8 @@ import { LIVE_MODEL } from "./contracts.ts";
 import { buildLiveSession, createLiveCall, parseLiveEvent, type LiveRequestIds } from "./openai-live-wire.ts";
 import { connectLiveSideband, type LiveSidebandSocket } from "./sideband.ts";
 import { VoiceTranscriptStore, type VoiceTranscript, type VoiceTranscriptEntry } from "./transcript-store.ts";
+import { CallMemoryService, pendingCallMemoryReview, type CallMemoryProcessor } from "./call-memory.ts";
+import { PiMemoryMcpClient } from "../pi-memory-client.ts";
 
 const OFFER_TTL_MS = 60_000;
 const SESSION_TTL_MS = 30 * 60_000;
@@ -76,10 +78,25 @@ export class RealtimeSessionBroker {
   private readonly offerSessions = new Map<string, string>();
   private readonly options: BrokerOptions;
   private readonly transcriptStore: VoiceTranscriptStore;
+  private readonly callMemory: CallMemoryProcessor;
+  private readonly onTranscriptUpdated?: (call: VoiceTranscript) => void;
 
-  constructor(options: BrokerOptions & { transcriptStore?: VoiceTranscriptStore }) {
+  constructor(options: BrokerOptions & {
+    transcriptStore?: VoiceTranscriptStore;
+    callMemory?: CallMemoryProcessor;
+    onTranscriptUpdated?: (call: VoiceTranscript) => void;
+  }) {
     this.options = options;
     this.transcriptStore = options.transcriptStore ?? new VoiceTranscriptStore();
+    this.callMemory = options.callMemory ?? new CallMemoryService(this.transcriptStore, new PiMemoryMcpClient());
+    this.onTranscriptUpdated = options.onTranscriptUpdated;
+    queueMicrotask(() => {
+      for (const call of this.transcriptStore.list(20).filter((candidate) => !candidate.review || candidate.review.status === "pending")) {
+        void this.callMemory.process(call.sessionId).then((updated) => {
+          if (updated) this.onTranscriptUpdated?.(updated);
+        }).catch(() => {});
+      }
+    });
   }
 
   createSession(request: LiveSessionCreateRequest): LiveSessionCreated {
@@ -226,13 +243,22 @@ export class RealtimeSessionBroker {
     session.abort.abort(new Error("Realtime session closed"));
     session.delegations?.stop();
     session.socket?.close(1000, "session closed");
-    this.transcriptStore.save({
+    const transcript = this.transcriptStore.save({
       sessionId: session.sessionId,
       targetId: session.targetId,
       startedAt: session.startedAt,
       endedAt: Date.now(),
       entries: session.transcript,
     });
+    if (transcript) {
+      const pending = this.transcriptStore.updateReview(session.sessionId, pendingCallMemoryReview());
+      if (pending) this.onTranscriptUpdated?.(pending);
+      queueMicrotask(() => {
+        void this.callMemory.process(session.sessionId).then((updated) => {
+          if (updated) this.onTranscriptUpdated?.(updated);
+        }).catch(() => {});
+      });
+    }
     return true;
   }
 
@@ -264,6 +290,17 @@ export class RealtimeSessionBroker {
 
   clearHistory(): number {
     return this.transcriptStore.clear();
+  }
+
+  async reviewMemoryCandidate(input: {
+    sessionId: string;
+    candidateId: string;
+    action: "keep" | "correct" | "ignore" | "forget";
+    text?: string;
+  }): Promise<VoiceTranscript> {
+    const updated = await this.callMemory.review(input);
+    this.onTranscriptUpdated?.(updated);
+    return updated;
   }
 
   subscribe(sessionId: string, listener: (payload: string) => void): (() => void) | undefined {

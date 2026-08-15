@@ -62,6 +62,34 @@ beforeAll(async () => {
       }],
     }),
   );
+  mkdirSync(join(home, ".openmausbot", "voice-calls"), { recursive: true });
+  writeFileSync(
+    join(home, ".openmausbot", "voice-calls", "voice-memory-fixture.json"),
+    JSON.stringify({
+      version: 2,
+      sessionId: "voice-memory-fixture",
+      targetId: "missing-bot",
+      startedAt: 10,
+      endedAt: 20,
+      summary: "Je préfère les réponses courtes",
+      entries: [{ role: "user", text: "Je préfère les réponses courtes.", at: 11 }],
+      review: {
+        status: "complete",
+        updatedAt: 20,
+        workingState: { decisions: [], commitments: [], openQuestions: [], deadlines: [] },
+        memoryCandidates: [{
+          id: "aaaaaaaaaaaaaaaaaaaa",
+          text: "Je préfère les réponses courtes.",
+          sourceQuote: "Je préfère les réponses courtes.",
+          at: 11,
+          kind: "preference",
+          confidence: 0.9,
+          status: "pending",
+        }],
+        followUpCandidates: [],
+      },
+    }),
+  );
 
   boxStub = createServer((req, res) => {
     const ok = req.headers.authorization === "Bearer box_good";
@@ -213,6 +241,17 @@ describe("harness HTTP API", () => {
     if (process.platform !== "win32") {
       expect(statSync(join(home, ".openmausbot", "work-items.json")).mode & 0o777).toBe(0o600);
     }
+  });
+
+  it("reviews a post-call memory candidate without writing it implicitly", async () => {
+    const ignored = await api("POST", "/api/realtime/history/voice-memory-fixture/memory-candidates/aaaaaaaaaaaaaaaaaaaa", {
+      action: "ignore",
+    });
+    expect(ignored.status).toBe(200);
+    expect(ignored.body.call.review.memoryCandidates[0]).toMatchObject({ status: "ignored" });
+    const history = await api("GET", "/api/realtime/history/voice-memory-fixture");
+    expect(history.body.review.memoryCandidates[0].status).toBe("ignored");
+    expect(history.body.review.memoryCandidates[0].memoryId).toBeUndefined();
   });
 
   it("describes the configured fleet, shadows included", async () => {

@@ -16,7 +16,17 @@ Baseline : `449bc10`
 - données locales atomiques en `0600`, répertoires privés en `0700` ;
 - protection contre les événements tardifs d'un ancien tour.
 
-Le prochain lot actif est **V2.2 — mémoire de travail post-appel**.
+**V2.2 — mémoire de travail post-appel : livré le 15 août 2026.**
+
+- extraction locale, déterministe, bornée et différée après fermeture ;
+- décisions, engagements, questions, échéances et follow-ups proposés ;
+- faits et préférences uniquement comme candidats avec source et confiance ;
+- carte post-appel et revue complète dans l'historique ;
+- confirmation/correction/oubli via Pi Memory MCP canonique ;
+- synchronisation à deux phases et fencing après crash pour éviter les doublons ;
+- suppression transcript explicitement distincte de l'oubli mémoire.
+
+Le prochain lot actif est **V2.3 — moteur de proactivité contrôlée**.
 
 ## 1. État réel
 
@@ -31,7 +41,7 @@ Le prochain lot actif est **V2.2 — mémoire de travail post-appel**.
 - routines durables créables et pilotables par la voix ;
 - transcript vocal local sans audio brut, historique et suppression ;
 - Gmail, Drive, Calendar, Pennylane, Pi Memory, CUA, peer agents et VM ;
-- application macOS signée, installée et couverte par 333 tests réussis.
+- application macOS signée, installée et couverte par 352 tests réussis.
 
 ### Écart principal
 
@@ -485,10 +495,10 @@ Node 24 avant une modernisation du lockfile ou du compilateur.
 
 ### V2.2 — « Je me souviens sans inventer »
 
-- Lot C ;
-- candidats mémoire et engagements ;
-- recall d'appel à la demande ;
-- contrôles corriger/ignorer/oublier.
+- [x] Lot C ;
+- [x] candidats mémoire et engagements ;
+- [x] recall d'appel à la demande ;
+- [x] contrôles corriger/ignorer/oublier.
 
 ### V2.3 — « Je te préviens au bon moment »
 

@@ -16,6 +16,7 @@ import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
 import { CallOverlay } from "@/components/CallView";
 import { MissionControl } from "@/components/MissionControl";
+import { CallMemoryCard } from "@/components/CallMemoryCard";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 
 function Shell() {
@@ -127,6 +128,7 @@ function Shell() {
           Navigation therefore cannot unmount its WebRTC controller. */}
       <CallOverlay bot={callBot} />
       <MissionControl />
+      <CallMemoryCard />
       </div>
     </div>
   );

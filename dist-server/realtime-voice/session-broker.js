@@ -6,6 +6,8 @@ import { LIVE_MODEL } from "./contracts.js";
 import { buildLiveSession, createLiveCall, parseLiveEvent } from "./openai-live-wire.js";
 import { connectLiveSideband } from "./sideband.js";
 import { VoiceTranscriptStore } from "./transcript-store.js";
+import { CallMemoryService, pendingCallMemoryReview } from "./call-memory.js";
+import { PiMemoryMcpClient } from "../pi-memory-client.js";
 const OFFER_TTL_MS = 60_000;
 const SESSION_TTL_MS = 30 * 60_000;
 const MAX_SDP_BYTES = 256 * 1024;
@@ -32,9 +34,21 @@ export class RealtimeSessionBroker {
     offerSessions = new Map();
     options;
     transcriptStore;
+    callMemory;
+    onTranscriptUpdated;
     constructor(options) {
         this.options = options;
         this.transcriptStore = options.transcriptStore ?? new VoiceTranscriptStore();
+        this.callMemory = options.callMemory ?? new CallMemoryService(this.transcriptStore, new PiMemoryMcpClient());
+        this.onTranscriptUpdated = options.onTranscriptUpdated;
+        queueMicrotask(() => {
+            for (const call of this.transcriptStore.list(20).filter((candidate) => !candidate.review || candidate.review.status === "pending")) {
+                void this.callMemory.process(call.sessionId).then((updated) => {
+                    if (updated)
+                        this.onTranscriptUpdated?.(updated);
+                }).catch(() => { });
+            }
+        });
     }
     createSession(request) {
         this.prune();
@@ -187,13 +201,24 @@ export class RealtimeSessionBroker {
         session.abort.abort(new Error("Realtime session closed"));
         session.delegations?.stop();
         session.socket?.close(1000, "session closed");
-        this.transcriptStore.save({
+        const transcript = this.transcriptStore.save({
             sessionId: session.sessionId,
             targetId: session.targetId,
             startedAt: session.startedAt,
             endedAt: Date.now(),
             entries: session.transcript,
         });
+        if (transcript) {
+            const pending = this.transcriptStore.updateReview(session.sessionId, pendingCallMemoryReview());
+            if (pending)
+                this.onTranscriptUpdated?.(pending);
+            queueMicrotask(() => {
+                void this.callMemory.process(session.sessionId).then((updated) => {
+                    if (updated)
+                        this.onTranscriptUpdated?.(updated);
+                }).catch(() => { });
+            });
+        }
         return true;
     }
     interruptVoice(sessionId) {
@@ -221,6 +246,11 @@ export class RealtimeSessionBroker {
     }
     clearHistory() {
         return this.transcriptStore.clear();
+    }
+    async reviewMemoryCandidate(input) {
+        const updated = await this.callMemory.review(input);
+        this.onTranscriptUpdated?.(updated);
+        return updated;
     }
     subscribe(sessionId, listener) {
         const session = this.sessions.get(sessionId);

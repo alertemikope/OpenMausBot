@@ -723,6 +723,7 @@ const realtimeBroker = new RealtimeSessionBroker({
     activeAgentTargets: () => agentConsult.activeTargets(),
     controlAgent: (input) => agentConsult.control(input),
     respondToRequest: (input) => agentConsult.respondToRequest(input),
+    onTranscriptUpdated: (call) => broadcast({ kind: "voice.call", call }),
     manageRoutine: async (input) => {
         if (!routines)
             throw new Error("the routine scheduler is still starting");
@@ -1100,6 +1101,21 @@ const server = createServer(async (req, res) => {
             return realtimeBroker.removeTranscript(realtimeHistoryMatch[1])
                 ? json(res, 200, { ok: true })
                 : json(res, 404, { error: "no such voice transcript" });
+        }
+        const memoryCandidateMatch = path.match(/^\/api\/realtime\/history\/(voice-[\w-]+)\/memory-candidates\/([a-f0-9]{20})$/u);
+        if (memoryCandidateMatch && method === "POST") {
+            const body = await readBody(req);
+            const action = typeof body.action === "string" ? body.action : "";
+            if (!["keep", "correct", "ignore", "forget"].includes(action)) {
+                return json(res, 400, { error: "action must be keep, correct, ignore, or forget" });
+            }
+            const call = await realtimeBroker.reviewMemoryCandidate({
+                sessionId: memoryCandidateMatch[1],
+                candidateId: memoryCandidateMatch[2],
+                action: action,
+                text: typeof body.text === "string" ? body.text : undefined,
+            });
+            return json(res, 200, { call });
         }
         if (method === "POST" && path === "/api/realtime/offers") {
             if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/sdp") {

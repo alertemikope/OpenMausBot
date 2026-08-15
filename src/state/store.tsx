@@ -16,6 +16,7 @@ import {
 import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
 import type { WorkItem } from "@/lib/work";
+import type { VoiceCallHistory } from "@/lib/call-memory";
 import { currentCall } from "@/lib/call";
 import { speaker } from "@/lib/tts";
 
@@ -205,6 +206,7 @@ interface AppState {
   routines: Routine[];
   routineRuns: RoutineRun[];
   workItems: WorkItem[];
+  recentCallReview?: VoiceCallHistory;
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
@@ -234,6 +236,8 @@ type Action =
   | { type: "workItemPatched"; item: WorkItem }
   | { type: "cancelWork"; workItemId: string }
   | { type: "markWorkSeen"; workItemId: string }
+  | { type: "voiceCallPatched"; call: VoiceCallHistory }
+  | { type: "dismissCallReview" }
   | { type: "createRoutine"; input: RoutineInput }
   | { type: "updateRoutine"; routineId: string; patch: Partial<RoutineInput> }
   | { type: "deleteRoutine"; routineId: string }
@@ -391,6 +395,10 @@ function reducer(state: AppState, action: Action): AppState {
         : [action.item, ...state.workItems];
       return { ...state, workItems: items.sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 500) };
     }
+    case "voiceCallPatched":
+      return { ...state, recentCallReview: action.call };
+    case "dismissCallReview":
+      return { ...state, recentCallReview: undefined };
     case "groupPatched": {
       const exists = state.groups.some((g) => g.id === action.group.id);
       const groups = exists
@@ -1076,6 +1084,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       api("/api/work")
         .then(({ items }) => alive && rawDispatch({ type: "workItemsHydrated", items }))
         .catch(() => {});
+      api("/api/realtime/history?limit=1")
+        .then(({ calls }) => {
+          const call = calls?.[0] as VoiceCallHistory | undefined;
+          if (alive && call?.review && call.review.memoryCandidates.some((item) => item.status === "pending")) {
+            rawDispatch({ type: "voiceCallPatched", call });
+          }
+        })
+        .catch(() => {});
     };
     loadAll();
 
@@ -1164,6 +1180,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "work.item":
           rawDispatch({ type: "workItemPatched", item: frame.item });
+          break;
+        case "voice.call":
+          rawDispatch({ type: "voiceCallPatched", call: frame.call });
           break;
         case "runtime": {
           const event = frame.event;

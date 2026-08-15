@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,5 +52,33 @@ describe("voice transcript store", () => {
     }
     expect(store.clear()).toBe(2);
     expect(store.list()).toEqual([]);
+  });
+
+  it("fences a Pi Memory mutation interrupted by application restart", () => {
+    const root = mkdtempSync(join(tmpdir(), "openmaus-voice-"));
+    roots.push(root);
+    mkdirSync(root, { recursive: true });
+    writeFileSync(join(root, "voice-restart.json"), JSON.stringify({
+      version: 2,
+      sessionId: "voice-restart",
+      targetId: "luna",
+      startedAt: 1,
+      endedAt: 2,
+      summary: "preference",
+      entries: [{ role: "user", text: "Je préfère bref.", at: 1 }],
+      review: {
+        status: "complete",
+        updatedAt: 2,
+        workingState: { decisions: [], commitments: [], openQuestions: [], deadlines: [] },
+        memoryCandidates: [{ id: "candidate", text: "Je préfère bref.", sourceQuote: "Je préfère bref.", at: 1, kind: "preference", confidence: 0.9, status: "syncing", syncAction: "keep" }],
+        followUpCandidates: [],
+      },
+    }));
+
+    const store = new VoiceTranscriptStore(root);
+    expect(store.get("voice-restart")?.review?.memoryCandidates[0]).toMatchObject({
+      status: "syncing",
+      syncError: expect.stringContaining("restarted"),
+    });
   });
 });

@@ -1,24 +1,17 @@
 import { useEffect, useState } from "react";
-import { Check, Clock3, Loader2, LogIn, LogOut, Phone } from "lucide-react";
+import { Check, Clock3, Loader2, LogIn, LogOut, Phone, Trash2 } from "lucide-react";
 
 import { startCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
 import { useStore } from "@/state/store";
 import type { ChatGptOAuthStatus } from "@/types/ogb";
+import type { VoiceCallHistory } from "@/lib/call-memory";
+import { CallMemoryReviewPanel } from "@/components/CallMemoryReview";
 
 const VOICES = ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"];
 
-type VoiceCallHistory = {
-  sessionId: string;
-  targetId: string;
-  startedAt: number;
-  endedAt: number;
-  summary: string;
-  entries: Array<{ role: "user" | "assistant"; text: string; at: number }>;
-};
-
 export function VoiceSettings() {
-  const { state } = useStore();
+  const { state, dispatch } = useStore();
   const [oauth, setOauth] = useState<ChatGptOAuthStatus | null>(null);
   const [oauthBusy, setOauthBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -224,10 +217,10 @@ export function VoiceSettings() {
               type="button"
               disabled={clearingHistory}
               onClick={() => {
-                if (!window.confirm("Delete all local voice transcripts? This cannot be undone.")) return;
+                if (!window.confirm("Delete all local voice transcripts? Confirmed Pi memories are separate and will not be forgotten.")) return;
                 setClearingHistory(true);
                 void fetch("/api/realtime/history", { method: "DELETE" })
-                  .then((response) => { if (!response.ok) throw new Error("Could not clear voice history"); setHistory([]); })
+                  .then((response) => { if (!response.ok) throw new Error("Could not clear voice history"); setHistory([]); dispatch({ type: "dismissCallReview" }); })
                   .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
                   .finally(() => setClearingHistory(false));
               }}
@@ -257,6 +250,33 @@ export function VoiceSettings() {
                       </div>
                     ))}
                   </div>
+                  {call.review && (
+                    <div className="mt-2 border-t border-hairline/40 pt-2">
+                      <CallMemoryReviewPanel
+                        call={call}
+                        onUpdated={(updated) => {
+                          setHistory((calls) => calls.map((candidate) => candidate.sessionId === updated.sessionId ? updated : candidate));
+                          dispatch({ type: "voiceCallPatched", call: updated });
+                        }}
+                      />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!window.confirm("Delete this local transcript? Confirmed Pi memories are separate and will not be forgotten.")) return;
+                      void fetch(`/api/realtime/history/${call.sessionId}`, { method: "DELETE" })
+                        .then((response) => {
+                          if (!response.ok) throw new Error("Could not delete voice transcript");
+                          setHistory((calls) => calls.filter((candidate) => candidate.sessionId !== call.sessionId));
+                          if (state.recentCallReview?.sessionId === call.sessionId) dispatch({ type: "dismissCallReview" });
+                        })
+                        .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
+                    }}
+                    className="mt-2 flex items-center gap-1 rounded-md px-2 py-1 text-[10.5px] text-danger hover:bg-danger/10"
+                  >
+                    <Trash2 size={11} /> Delete transcript only
+                  </button>
                 </details>
               );
             })}
