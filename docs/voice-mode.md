@@ -171,6 +171,8 @@ Completed user and assistant transcript segments are stored locally under
 `GET /api/realtime/history` returns the bounded recent-call timeline and the
 next Realtime session receives only a short recent-call map, not full transcript
 replay. `GET /api/realtime/history/:sessionId` expands one local transcript.
+Voice settings expose the same timeline and an explicit, confirmed **Clear
+history** action (`DELETE /api/realtime/history`).
 Closing the voice line stops capture/playback but does not cancel harness tasks.
 
 ## Message playback

@@ -1070,10 +1070,18 @@ const server = createServer(async (req, res) => {
       const requested = Number(url.searchParams.get("limit") ?? 20);
       return json(res, 200, { calls: realtimeBroker.history(Number.isFinite(requested) ? requested : 20) });
     }
+    if (method === "DELETE" && path === "/api/realtime/history") {
+      return json(res, 200, { ok: true, removed: realtimeBroker.clearHistory() });
+    }
     const realtimeHistoryMatch = path.match(/^\/api\/realtime\/history\/(voice-[\w-]+)$/u);
     if (realtimeHistoryMatch && method === "GET") {
       const transcript = realtimeBroker.transcript(realtimeHistoryMatch[1]);
       return transcript ? json(res, 200, transcript) : json(res, 404, { error: "no such voice transcript" });
+    }
+    if (realtimeHistoryMatch && method === "DELETE") {
+      return realtimeBroker.removeTranscript(realtimeHistoryMatch[1])
+        ? json(res, 200, { ok: true })
+        : json(res, 404, { error: "no such voice transcript" });
     }
     if (method === "POST" && path === "/api/realtime/offers") {
       if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/sdp") {

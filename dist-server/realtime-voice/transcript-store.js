@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic.js";
 import { DATA_DIR } from "../config.js";
@@ -60,5 +60,25 @@ export class VoiceTranscriptStore {
         if (!calls.length)
             return "";
         return calls.map((call) => `- ${new Date(call.startedAt).toISOString()}: ${call.summary}`).join("\n").slice(0, 1_500);
+    }
+    remove(sessionId) {
+        const id = safeId(sessionId);
+        if (!id)
+            return false;
+        try {
+            rmSync(join(this.directory, `${id}.json`));
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+    clear() {
+        const calls = this.list(100);
+        let removed = 0;
+        for (const call of calls)
+            if (this.remove(call.sessionId))
+                removed += 1;
+        return removed;
     }
 }

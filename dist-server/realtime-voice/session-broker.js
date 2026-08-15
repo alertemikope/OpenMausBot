@@ -215,6 +215,12 @@ export class RealtimeSessionBroker {
     transcript(sessionId) {
         return this.transcriptStore.get(sessionId);
     }
+    removeTranscript(sessionId) {
+        return this.transcriptStore.remove(sessionId);
+    }
+    clearHistory() {
+        return this.transcriptStore.clear();
+    }
     subscribe(sessionId, listener) {
         const session = this.sessions.get(sessionId);
         if (!session)

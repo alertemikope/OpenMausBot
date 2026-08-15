@@ -31,6 +31,8 @@ describe("voice transcript store", () => {
     expect(JSON.stringify(saved)).not.toContain("audio");
     expect(store.get("voice-1")?.entries).toHaveLength(2);
     expect(store.recentContext()).toContain("Vérifie les mails");
+    expect(store.remove("voice-1")).toBe(true);
+    expect(store.get("voice-1")).toBeUndefined();
   });
 
   it("does not create empty call history", () => {
@@ -38,6 +40,17 @@ describe("voice transcript store", () => {
     roots.push(root);
     const store = new VoiceTranscriptStore(root);
     expect(store.save({ sessionId: "voice-empty", targetId: "luna", startedAt: 1, endedAt: 2, entries: [] })).toBeUndefined();
+    expect(store.list()).toEqual([]);
+  });
+
+  it("clears the bounded local history", () => {
+    const root = mkdtempSync(join(tmpdir(), "openmaus-voice-"));
+    roots.push(root);
+    const store = new VoiceTranscriptStore(root);
+    for (const sessionId of ["voice-1", "voice-2"]) {
+      store.save({ sessionId, targetId: "luna", startedAt: 1, endedAt: 2, entries: [{ role: "user", text: sessionId, at: 1 }] });
+    }
+    expect(store.clear()).toBe(2);
     expect(store.list()).toEqual([]);
   });
 });

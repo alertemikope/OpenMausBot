@@ -255,6 +255,14 @@ export class RealtimeSessionBroker {
     return this.transcriptStore.get(sessionId);
   }
 
+  removeTranscript(sessionId: string): boolean {
+    return this.transcriptStore.remove(sessionId);
+  }
+
+  clearHistory(): number {
+    return this.transcriptStore.clear();
+  }
+
   subscribe(sessionId: string, listener: (payload: string) => void): (() => void) | undefined {
     const session = this.sessions.get(sessionId);
     if (!session) return undefined;

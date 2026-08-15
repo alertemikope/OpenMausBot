@@ -31,6 +31,7 @@ export function VoiceSettings() {
   const [wakePhrase, setWakePhrase] = useState("Salut Kenpachi");
   const [savingWake, setSavingWake] = useState(false);
   const [history, setHistory] = useState<VoiceCallHistory[]>([]);
+  const [clearingHistory, setClearingHistory] = useState(false);
 
   const refreshOauth = async () => {
     const bridge = window.ogb?.chatgptOAuth;
@@ -213,9 +214,28 @@ export function VoiceSettings() {
       )}
 
       <section aria-labelledby="voice-history-heading" className="rounded-xl bg-card p-4">
-        <div className="flex items-center gap-2">
-          <Clock3 size={15} className="text-ink-secondary" />
-          <h2 id="voice-history-heading" className="text-[15px] font-medium text-ink">Recent voice calls</h2>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Clock3 size={15} className="text-ink-secondary" />
+            <h2 id="voice-history-heading" className="text-[15px] font-medium text-ink">Recent voice calls</h2>
+          </div>
+          {history.length > 0 && (
+            <button
+              type="button"
+              disabled={clearingHistory}
+              onClick={() => {
+                if (!window.confirm("Delete all local voice transcripts? This cannot be undone.")) return;
+                setClearingHistory(true);
+                void fetch("/api/realtime/history", { method: "DELETE" })
+                  .then((response) => { if (!response.ok) throw new Error("Could not clear voice history"); setHistory([]); })
+                  .catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)))
+                  .finally(() => setClearingHistory(false));
+              }}
+              className="rounded-lg px-2.5 py-1 text-[11.5px] text-danger hover:bg-danger/10 disabled:opacity-50"
+            >
+              {clearingHistory ? "Clearing…" : "Clear history"}
+            </button>
+          )}
         </div>
         <div className="mt-1 text-[12px] text-ink-secondary">Finalized text stays on this Mac. Raw microphone audio is never stored.</div>
         {history.length ? (
