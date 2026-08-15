@@ -26,6 +26,10 @@ export function buildLiveSession(params) {
         throw new Error("Unsupported GPT-Live model");
     const initialText = params.initialText?.trim().slice(0, MAX_TRANSCRIPT_CHARS);
     const language = params.language?.trim().slice(0, 32);
+    const targets = (params.targets ?? []).slice(0, 24);
+    const targetCatalog = targets.length
+        ? `Available OpenMaus agents (use the exact id): ${targets.map((target) => `${target.name}=${target.id}`).join(", ")}. Default: ${params.defaultTargetId ?? targets[0]?.id}.`
+        : "";
     return {
         model: LIVE_MODEL,
         instructions: [
@@ -36,6 +40,9 @@ export function buildLiveSession(params) {
             "Never claim an action succeeded before the delegated agent reports completion.",
             "Speaking over you only interrupts speech; it never cancels delegated work.",
             "Simple requests to open, show, or switch to a bot conversation are handled locally by the app. Briefly acknowledge them and do not delegate them as agent work.",
+            targetCatalog,
+            targets.length ? "When the user names an agent for work, route to that agent. For client delegation, prefix the delegated text with [OPENMAUS_TARGET:exact-id]. Omit the marker only when the default agent is intended." : "",
+            params.recentCallContext?.trim() ? `Recent local voice-call map (no raw audio; use only when relevant):\n${params.recentCallContext.trim().slice(0, 1_500)}` : "",
             language ? `Use ${language} as the primary spoken language.` : "",
             params.instructions?.trim().slice(0, 2_000) ?? "",
         ]
@@ -51,6 +58,12 @@ export function buildLiveSession(params) {
             }
             : {}),
     };
+}
+function delegationTarget(prompt) {
+    const match = prompt.match(/^\s*\[OPENMAUS_TARGET:([\w-]{1,128})\]\s*/u);
+    return match
+        ? { prompt: prompt.slice(match[0].length).trim(), targetId: match[1] }
+        : { prompt: prompt.trim() };
 }
 export function resolveChatGptIdentity(accessToken) {
     const parts = accessToken.split(".");
@@ -206,8 +219,9 @@ export function parseLiveEvent(payload) {
             .filter((part) => part?.type === "input_text")
             .map((part) => boundedText(part?.text) ?? "")
             .join("");
-        return item?.type === "delegation" && item.target === "client" && id && prompt.trim()
-            ? { kind: "delegation", id, prompt }
+        const routed = delegationTarget(prompt);
+        return item?.type === "delegation" && item.target === "client" && id && routed.prompt
+            ? { kind: "delegation", id, ...routed }
             : { kind: "ignored", eventType: type };
     }
     if (type === "response.function_call_arguments.done" || type === "response.output_item.done") {
@@ -219,12 +233,13 @@ export function parseLiveEvent(payload) {
             try {
                 const decodedArgs = record(JSON.parse(args));
                 const prompt = boundedText(decodedArgs?.prompt)?.trim();
+                const targetId = boundedText(decodedArgs?.target_id, 128)?.trim();
                 const candidateMode = boundedText(decodedArgs?.mode, 32);
                 const mode = candidateMode === "task" || candidateMode === "status" || candidateMode === "cancel" || candidateMode === "steer" || candidateMode === "followup"
                     ? candidateMode
                     : undefined;
                 if (prompt)
-                    return { kind: "delegation", id, prompt, ...(mode ? { mode } : {}) };
+                    return { kind: "delegation", id, prompt, ...(targetId ? { targetId } : {}), ...(mode ? { mode } : {}) };
             }
             catch { }
         }
@@ -234,6 +249,12 @@ export function parseLiveEvent(payload) {
         const text = boundedText(event.transcript);
         return text === undefined ? { kind: "ignored", eventType: type } : { kind: "transcript", role: "user", text, done: true };
     }
+    if ((type === "response.audio_transcript.done" || type === "response.output_audio_transcript.done") && typeof event.transcript === "string") {
+        const text = boundedText(event.transcript);
+        return text === undefined ? { kind: "ignored", eventType: type } : { kind: "transcript", role: "assistant", text, done: true };
+    }
+    if (type === "response.done")
+        return { kind: "response-finished" };
     if (type === "error") {
         const error = record(event.error);
         const message = boundedText(error?.message, 1_000) ?? boundedText(event.message, 1_000) ?? "GPT-Live sideband error";

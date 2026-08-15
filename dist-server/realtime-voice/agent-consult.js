@@ -1,8 +1,14 @@
 export class HarnessAgentConsultRuntime {
+    // A voice call is a controller, not the lifetime owner of agent work. Keep
+    // one active run per target so different bots can work in parallel and a
+    // reconnecting/new voice session can still query or cancel that work.
     active = new Map();
     deps;
     generation = 0;
     constructor(deps) { this.deps = deps; }
+    activeTargets() {
+        return [...this.active.keys()];
+    }
     run(input) {
         const target = this.deps.resolveTarget(input.targetId);
         if (!target)
@@ -12,12 +18,13 @@ export class HarnessAgentConsultRuntime {
         const generation = ++this.generation;
         const run = {
             generation,
+            voiceSessionId: input.voiceSessionId,
             targetId: input.targetId,
             threadId: target.threadId,
             startedAt: Date.now(),
             progress: "Starting the selected OpenMaus bot",
         };
-        this.active.set(input.voiceSessionId, run);
+        this.active.set(input.targetId, run);
         return new Promise((resolve, reject) => {
             let text = "";
             let settled = false;
@@ -27,8 +34,8 @@ export class HarnessAgentConsultRuntime {
                 clearTimeout(abortTimer);
                 unsubscribe();
                 input.signal.removeEventListener("abort", onAbort);
-                if (this.active.get(input.voiceSessionId)?.generation === generation)
-                    this.active.delete(input.voiceSessionId);
+                if (this.active.get(input.targetId)?.generation === generation)
+                    this.active.delete(input.targetId);
             };
             const finish = (error) => {
                 if (settled)
@@ -92,8 +99,8 @@ export class HarnessAgentConsultRuntime {
         });
     }
     async control(input) {
-        const run = this.active.get(input.voiceSessionId);
-        if (!run || run.targetId !== input.targetId) {
+        const run = this.active.get(input.targetId);
+        if (!run) {
             return { ok: false, message: "There is no active delegated task." };
         }
         const target = this.deps.resolveTarget(run.targetId);

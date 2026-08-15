@@ -161,7 +161,24 @@ function RealtimeCall({ bot }: { bot: Bot }) {
 
   const messages = visibleMessages(bot);
   const approval = pendingApprovals(messages)[0];
-  const currentTool = [...messages].reverse().find((message) => message.kind === "activity" && message.tool)?.tool?.name;
+  const activeAgents = storeState.bots.flatMap((candidate) => {
+    const candidateMessages = visibleMessages(candidate);
+    const candidateApproval = pendingApprovals(candidateMessages)[0];
+    let lastUserIndex = -1;
+    for (let index = candidateMessages.length - 1; index >= 0; index -= 1) {
+      if (candidateMessages[index]?.role === "user") {
+        lastUserIndex = index;
+        break;
+      }
+    }
+    const tool = candidateMessages
+      .slice(lastUserIndex + 1)
+      .reverse()
+      .find((message) => message.kind === "activity" && message.tool)?.tool?.name;
+    return candidate.busy || candidateApproval
+      ? [{ bot: candidate, approval: candidateApproval, tool }]
+      : [];
+  });
 
   useEffect(() => {
     alive.current = true;
@@ -291,25 +308,33 @@ function RealtimeCall({ bot }: { bot: Bot }) {
         )}
       </div>
 
-      {(currentTool || approval) && (
-        <div className="mt-3 flex items-center gap-3 rounded-xl bg-raised px-3 py-1.5 text-[11.5px] text-ink-secondary" aria-label="Current agent activity">
-          <span>{approval ? `Approval: ${approval.detail}` : `Current tool: ${currentTool}`}</span>
-          {approval && (
-            <button
-              type="button"
-              aria-label="Deny the pending approval"
-              onClick={() => dispatch({
-                type: "decideRequest",
-                threadId: bot.threadId,
-                requestId: approval.requestId,
-                behavior: "deny",
-                message: "Denied by the user from the Jarvis overlay.",
-              })}
-              className="rounded-full border border-danger/40 px-2 py-0.5 text-danger hover:bg-danger/10"
-            >
-              Deny
-            </button>
-          )}
+      {activeAgents.length > 0 && (
+        <div className="mt-3 space-y-1.5" aria-label="Active Jarvis agent work">
+          {activeAgents.map(({ bot: activeBot, approval: activeApproval, tool }) => (
+            <div key={activeBot.id} className="flex items-center gap-2 rounded-xl bg-raised px-3 py-1.5 text-[11.5px] text-ink-secondary">
+              <Loader2 size={11} className="shrink-0 animate-spin" />
+              <button type="button" onClick={() => dispatch({ type: "select", id: activeBot.id })} className="shrink-0 font-medium text-ink hover:text-accent">
+                {activeBot.name}
+              </button>
+              <span className="min-w-0 flex-1 truncate">{activeApproval ? `Approval: ${activeApproval.detail}` : tool ? `Tool: ${tool}` : "Working"}</span>
+              {activeApproval && (
+                <button
+                  type="button"
+                  aria-label={`Deny ${activeBot.name} pending approval`}
+                  onClick={() => dispatch({
+                    type: "decideRequest",
+                    threadId: activeBot.threadId,
+                    requestId: activeApproval.requestId,
+                    behavior: "deny",
+                    message: "Denied by the user from the Jarvis dock.",
+                  })}
+                  className="rounded-full border border-danger/40 px-2 py-0.5 text-danger hover:bg-danger/10"
+                >
+                  Deny
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
 

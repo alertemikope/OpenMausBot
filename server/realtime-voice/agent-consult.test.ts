@@ -59,7 +59,7 @@ describe("harness-backed AgentConsult runtime", () => {
     await expect(result).resolves.toEqual({ text: "No invoice is missing." });
   });
 
-  it("cancels only the active voice-owned turn", async () => {
+  it("keeps target-owned work controllable after the originating voice session changes", async () => {
     const { runtime, adapter, emit } = fixture();
     const controller = new AbortController();
     const result = runtime.run({
@@ -71,8 +71,6 @@ describe("harness-backed AgentConsult runtime", () => {
     });
     emit(runtimeEvent("turn.started"));
     await expect(runtime.control({ voiceSessionId: "voice-other", targetId: "bot-1", mode: "cancel", text: "cancel" }))
-      .resolves.toEqual({ ok: false, message: "There is no active delegated task." });
-    await expect(runtime.control({ voiceSessionId: "voice-1", targetId: "bot-1", mode: "cancel", text: "cancel" }))
       .resolves.toEqual({ ok: true, message: "The active agent task was cancelled." });
     expect(adapter.interruptTurn).toHaveBeenCalledWith("thread-1", "turn-1");
     emit(runtimeEvent("turn.completed", { ok: false, stopReason: "cancelled" }));
@@ -94,5 +92,43 @@ describe("harness-backed AgentConsult runtime", () => {
       requestId: "request-1",
       behavior: "deny",
     })).rejects.toThrow("no longer owned");
+  });
+
+  it("tracks independent target runs in parallel", async () => {
+    const listeners = new Set<(event: RuntimeEvent) => void>();
+    const adapter = {
+      interruptTurn: vi.fn(async () => {}),
+      respondToRequest: vi.fn(async () => {}),
+    } as unknown as ProviderAdapter;
+    const runtime = new HarnessAgentConsultRuntime({
+      resolveTarget: (targetId) => ({ targetId, threadId: `thread-${targetId}`, busy: false, adapter }),
+      startTurn: vi.fn(async () => {}),
+      subscribe: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    });
+    const luna = runtime.run({
+      voiceSessionId: "voice-1",
+      targetId: "luna",
+      prompt: "mail",
+      signal: new AbortController().signal,
+      onEvent: vi.fn(),
+    });
+    const codex = runtime.run({
+      voiceSessionId: "voice-1",
+      targetId: "codex",
+      prompt: "code",
+      signal: new AbortController().signal,
+      onEvent: vi.fn(),
+    });
+    expect(runtime.activeTargets().sort()).toEqual(["codex", "luna"]);
+    for (const listener of listeners) listener(runtimeEvent("item.completed", { threadId: "thread-luna", turnId: "turn-luna", itemType: "assistant_text", text: "mail done" }));
+    for (const listener of listeners) listener(runtimeEvent("turn.completed", { threadId: "thread-luna", turnId: "turn-luna", ok: true }));
+    for (const listener of listeners) listener(runtimeEvent("item.completed", { threadId: "thread-codex", turnId: "turn-codex", itemType: "assistant_text", text: "code done" }));
+    for (const listener of listeners) listener(runtimeEvent("turn.completed", { threadId: "thread-codex", turnId: "turn-codex", ok: true }));
+    await expect(luna).resolves.toEqual({ text: "mail done" });
+    await expect(codex).resolves.toEqual({ text: "code done" });
+    expect(runtime.activeTargets()).toEqual([]);
   });
 });

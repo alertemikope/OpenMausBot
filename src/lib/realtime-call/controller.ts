@@ -35,6 +35,8 @@ function needsHarnessRelay(event: RealtimePeerEvent): boolean {
   return event.type === "response.function_call_arguments.done"
     || event.type === "response.output_item.done"
     || event.type === "conversation.item.input_audio_transcription.completed"
+    || event.type === "response.audio_transcript.done"
+    || event.type === "response.output_audio_transcript.done"
     || event.type === "error";
 }
 

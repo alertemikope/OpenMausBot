@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Loader2, LogIn, LogOut, Phone } from "lucide-react";
+import { Check, Clock3, Loader2, LogIn, LogOut, Phone } from "lucide-react";
 
 import { startCall } from "@/lib/call";
 import { cn } from "@/lib/cn";
@@ -7,6 +7,15 @@ import { useStore } from "@/state/store";
 import type { ChatGptOAuthStatus } from "@/types/ogb";
 
 const VOICES = ["alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse"];
+
+type VoiceCallHistory = {
+  sessionId: string;
+  targetId: string;
+  startedAt: number;
+  endedAt: number;
+  summary: string;
+  entries: Array<{ role: "user" | "assistant"; text: string; at: number }>;
+};
 
 export function VoiceSettings() {
   const { state } = useStore();
@@ -21,6 +30,7 @@ export function VoiceSettings() {
   const [wake, setWake] = useState<WakeWordState | null>(null);
   const [wakePhrase, setWakePhrase] = useState("Salut Kenpachi");
   const [savingWake, setSavingWake] = useState(false);
+  const [history, setHistory] = useState<VoiceCallHistory[]>([]);
 
   const refreshOauth = async () => {
     const bridge = window.ogb?.chatgptOAuth;
@@ -35,6 +45,10 @@ export function VoiceSettings() {
   useEffect(() => {
     void refreshOauth().catch((cause) => setError(cause instanceof Error ? cause.message : String(cause)));
     void refreshDevices().catch(() => {});
+    void fetch("/api/realtime/history?limit=10")
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Voice history unavailable")))
+      .then((value: { calls?: VoiceCallHistory[] }) => setHistory(value.calls ?? []))
+      .catch(() => {});
     const changed = () => void refreshDevices();
     navigator.mediaDevices?.addEventListener?.("devicechange", changed);
     return () => navigator.mediaDevices?.removeEventListener?.("devicechange", changed);
@@ -197,6 +211,40 @@ export function VoiceSettings() {
           </div>
         </section>
       )}
+
+      <section aria-labelledby="voice-history-heading" className="rounded-xl bg-card p-4">
+        <div className="flex items-center gap-2">
+          <Clock3 size={15} className="text-ink-secondary" />
+          <h2 id="voice-history-heading" className="text-[15px] font-medium text-ink">Recent voice calls</h2>
+        </div>
+        <div className="mt-1 text-[12px] text-ink-secondary">Finalized text stays on this Mac. Raw microphone audio is never stored.</div>
+        {history.length ? (
+          <div className="mt-3 space-y-2">
+            {history.map((call) => {
+              const target = state.bots.find((bot) => bot.id === call.targetId)?.name ?? "Jarvis";
+              const duration = Math.max(0, Math.round((call.endedAt - call.startedAt) / 1_000));
+              return (
+                <details key={call.sessionId} className="rounded-lg bg-inset px-3 py-2">
+                  <summary className="cursor-pointer list-none text-[12.5px] text-ink">
+                    <span className="font-medium">{target}</span>
+                    <span className="ml-2 text-ink-secondary">{new Date(call.startedAt).toLocaleString()} · {duration}s</span>
+                    <div className="mt-0.5 truncate text-[11.5px] text-ink-secondary">{call.summary || "Voice conversation"}</div>
+                  </summary>
+                  <div className="mt-2 max-h-44 space-y-1.5 overflow-y-auto border-t border-hairline/40 pt-2">
+                    {call.entries.map((entry, index) => (
+                      <div key={`${entry.at}-${index}`} className="text-[11.5px] leading-relaxed text-ink-secondary">
+                        <span className="font-medium text-ink">{entry.role === "user" ? "You" : "Jarvis"}:</span> {entry.text}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-lg bg-inset px-3 py-3 text-[12px] text-ink-secondary">No completed voice call has been recorded yet.</div>
+        )}
+      </section>
     </div>
   );
 }

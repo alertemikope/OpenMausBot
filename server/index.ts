@@ -727,8 +727,10 @@ const agentConsult = new HarnessAgentConsultRuntime({
 
 const realtimeBroker = new RealtimeSessionBroker({
   targetExists: (targetId) => Boolean(store.bot(targetId)),
+  listTargets: () => store.bots.filter((bot) => !bot.hidden).map((bot) => ({ id: bot.id, name: bot.name })),
   oauth: new ElectronOAuthClient(),
   runAgentConsult: (input) => agentConsult.run(input),
+  activeAgentTargets: () => agentConsult.activeTargets(),
   controlAgent: (input) => agentConsult.control(input),
   respondToRequest: (input) => agentConsult.respondToRequest(input),
 });
@@ -1060,6 +1062,18 @@ const server = createServer(async (req, res) => {
         initialText: typeof body.initialText === "string" ? body.initialText : undefined,
       });
       return json(res, 201, session);
+    }
+    if (method === "GET" && path === "/api/realtime/sessions") {
+      return json(res, 200, { sessions: realtimeBroker.list() });
+    }
+    if (method === "GET" && path === "/api/realtime/history") {
+      const requested = Number(url.searchParams.get("limit") ?? 20);
+      return json(res, 200, { calls: realtimeBroker.history(Number.isFinite(requested) ? requested : 20) });
+    }
+    const realtimeHistoryMatch = path.match(/^\/api\/realtime\/history\/(voice-[\w-]+)$/u);
+    if (realtimeHistoryMatch && method === "GET") {
+      const transcript = realtimeBroker.transcript(realtimeHistoryMatch[1]);
+      return transcript ? json(res, 200, transcript) : json(res, 404, { error: "no such voice transcript" });
     }
     if (method === "POST" && path === "/api/realtime/offers") {
       if (String(req.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLowerCase() !== "application/sdp") {

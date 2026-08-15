@@ -37,6 +37,11 @@ export type LiveSessionCreateRequest = {
   initialText?: string;
 };
 
+export type LiveTargetDescriptor = {
+  id: string;
+  name: string;
+};
+
 export type LiveSessionPublic = {
   sessionId: string;
   targetId: string;
@@ -59,6 +64,7 @@ export interface AgentConsultRuntime {
     signal: AbortSignal;
     onEvent(event: RuntimeEvent): void;
   }): Promise<{ text: string }>;
+  activeTargets?(): string[];
 }
 
 export type AgentControlMode = "status" | "cancel" | "steer" | "followup";

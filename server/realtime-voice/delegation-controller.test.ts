@@ -77,13 +77,15 @@ describe("GPT-Live delegation controller", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("fences a superseded delegation before starting its replacement", async () => {
+  it("queues same-agent work without aborting the active task", async () => {
     const socket = new FakeSocket();
     const prompts: string[] = [];
+    let finishOld!: (result: { text: string }) => void;
     const run = vi.fn(({ prompt, signal }: { prompt: string; signal: AbortSignal }) => {
       prompts.push(prompt);
       return new Promise<{ text: string }>((resolve, reject) => {
         signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        if (prompt === "old task") finishOld = resolve;
         if (prompt === "new task") resolve({ text: "new result" });
       });
     });
@@ -98,9 +100,12 @@ describe("GPT-Live delegation controller", () => {
     });
     controller.handle(delegation("old", "old task"));
     controller.handle(delegation("new", "new task"));
+    await vi.waitFor(() => expect(socket.sent.join("\n")).toContain("queued"));
+    expect(prompts).toEqual(["old task"]);
+    finishOld({ text: "old result" });
     await vi.waitFor(() => expect(prompts).toEqual(["old task", "new task"]));
     await vi.waitFor(() => expect(socket.sent.join("\n")).toContain("new result"));
-    expect(socket.sent.join("\n")).not.toContain("old result");
+    expect(socket.sent.join("\n")).toContain("old result");
   });
 
   it("returns GA agent_consult output once and creates the follow-up response", async () => {
@@ -127,7 +132,7 @@ describe("GPT-Live delegation controller", () => {
     await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
     expect(run).toHaveBeenCalledOnce();
     expect(socket.sent.map((payload) => JSON.parse(payload))).toEqual([
-      { type: "conversation.item.create", item: { type: "function_call_output", call_id: "call-1", output: "Luna Max" } },
+      { type: "conversation.item.create", item: { type: "function_call_output", call_id: "call-1", output: "bot-1: Luna Max" } },
       { type: "response.create" },
     ]);
   });
@@ -187,9 +192,117 @@ describe("GPT-Live delegation controller", () => {
     controller.handle(call("followup-1", "followup", "second task"));
     await vi.waitFor(() => expect(socket.sent.join("\n")).toContain("queued"));
     expect(socket.sent.map((payload) => JSON.parse(payload)).filter((event) => event.item?.call_id === "followup-1")).toHaveLength(0);
+    controller.handle(JSON.stringify({ type: "response.done" }));
     finishFirst({ text: "first done" });
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(socket.sent.map((payload) => JSON.parse(payload)).some((event) => event.item?.call_id === "followup-1" && event.item.output === "follow-up done")).toBe(true));
+    controller.handle(JSON.stringify({ type: "response.done" }));
+    controller.handle(JSON.stringify({ type: "response.done" }));
+    await vi.waitFor(() => expect(socket.sent.map((payload) => JSON.parse(payload)).some((event) => event.item?.call_id === "followup-1" && event.item.output.includes("follow-up done"))).toBe(true));
+  });
+
+  it("runs explicitly targeted agents in parallel", async () => {
+    const socket = new FakeSocket();
+    const pending = new Map<string, (result: { text: string }) => void>();
+    const run = vi.fn(({ targetId }: { targetId: string }) => new Promise<{ text: string }>((resolve) => pending.set(targetId, resolve)));
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-1",
+      targetId: "luna",
+      targets: [{ id: "luna", name: "Luna Max" }, { id: "codex", name: "Codex" }],
+      socket,
+      transport: "ga-realtime",
+      runtime: { run },
+      control: vi.fn(),
+      respondToRequest: vi.fn(),
+      onFatal: vi.fn(),
+    });
+    const call = (id: string, targetId: string, prompt: string) => JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "agent_consult",
+      call_id: id,
+      arguments: JSON.stringify({ mode: "task", target_id: targetId, prompt }),
+    });
+    controller.handle(call("luna-task", "luna", "check mail"));
+    controller.handle(call("codex-task", "codex", "review code"));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(run.mock.calls.map(([input]) => input.targetId).sort()).toEqual(["codex", "luna"]);
+    pending.get("codex")?.({ text: "code done" });
+    pending.get("luna")?.({ text: "mail done" });
+    await vi.waitFor(() => expect(socket.sent.join("\n")).toMatch(/(?:Codex: code done|Luna Max: mail done)/));
+    controller.handle(JSON.stringify({ type: "response.done" }));
+    await vi.waitFor(() => expect(socket.sent.join("\n")).toContain("Codex: code done"));
+    await vi.waitFor(() => expect(socket.sent.join("\n")).toContain("Luna Max: mail done"));
+  });
+
+  it("routes a named agent from natural delegation text", async () => {
+    const socket = new FakeSocket();
+    const run = vi.fn(async () => ({ text: "done" }));
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-1",
+      targetId: "luna",
+      targets: [{ id: "luna", name: "Luna Max" }, { id: "codex", name: "Codex" }],
+      socket,
+      runtime: { run },
+      control: vi.fn(),
+      respondToRequest: vi.fn(),
+      onFatal: vi.fn(),
+    });
+    controller.handle(delegation("task-1", "Demande à Codex de vérifier le dépôt"));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledWith(expect.objectContaining({ targetId: "codex" })));
+  });
+
+  it("lets active and queued agent work finish after the voice line closes", async () => {
+    const socket = new FakeSocket();
+    let finishFirst!: (result: { text: string }) => void;
+    const run = vi.fn()
+      .mockImplementationOnce(({ signal }: { signal: AbortSignal }) => new Promise<{ text: string }>((resolve) => {
+        expect(signal.aborted).toBe(false);
+        finishFirst = resolve;
+      }))
+      .mockResolvedValueOnce({ text: "queued done" });
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-1",
+      targetId: "luna",
+      socket,
+      runtime: { run },
+      control: vi.fn(),
+      respondToRequest: vi.fn(),
+      onFatal: vi.fn(),
+    });
+    controller.handle(delegation("task-1", "first"));
+    controller.handle(delegation("task-2", "second"));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    controller.stop();
+    const sentBeforeCompletion = socket.sent.length;
+    finishFirst({ text: "first done" });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(socket.sent).toHaveLength(sentBeforeCompletion);
+  });
+
+  it("reports target-owned work from an earlier voice controller", async () => {
+    const socket = new FakeSocket();
+    const control = vi.fn(async ({ targetId }: { targetId: string }) => ({ ok: true, message: `${targetId} running` }));
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-new",
+      targetId: "luna",
+      targets: [{ id: "luna", name: "Luna Max" }, { id: "codex", name: "Codex" }],
+      activeTargets: () => ["luna", "codex"],
+      socket,
+      transport: "ga-realtime",
+      runtime: { run: vi.fn() },
+      control,
+      respondToRequest: vi.fn(),
+      onFatal: vi.fn(),
+    });
+    controller.handle(JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "agent_consult",
+      call_id: "status-all",
+      arguments: JSON.stringify({ mode: "status", prompt: "Où en sont les tâches ?" }),
+    }));
+    await vi.waitFor(() => expect(control).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(socket.sent.join("\n")).toContain("Luna Max: luna running"));
+    expect(socket.sent.join("\n")).toContain("Codex: codex running");
   });
 
   it("resolves both the active GA task and the cancel control function", async () => {

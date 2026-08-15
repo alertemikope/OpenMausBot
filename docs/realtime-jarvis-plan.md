@@ -9,8 +9,8 @@ d'OpenMausBot un assistant de type Jarvis sans remplacer son harness d'agents.
 > 0.7 conservent le dossier historique d'avant chantier pour l'audit. Elles ne
 > décrivent plus l'état du code. Le runtime installé est désormais
 > full-duplex WebRTC, OAuth ChatGPT chiffré, GPT-Live-first avec fallback
-> abonnement `gpt-realtime-2.1`, délégation vers le bot sélectionné, contrôle
-> continu, confirmations liées au `requestId`, wake Kenpachi et interface
+> abonnement `gpt-realtime-2.1`, délégation parallèle vers des bots nommés,
+> contrôle continu, confirmations liées au `requestId`, wake Kenpachi et interface
 > accessible. ElevenLabs et le chemin d'appel half-duplex ont été retirés.
 
 ### Statut de livraison actuel
@@ -18,10 +18,10 @@ d'OpenMausBot un assistant de type Jarvis sans remplacer son harness d'agents.
 | Milestone | Statut | Preuve principale |
 | --- | --- | --- |
 | 1 — Conversation temps réel | terminé pour le transport | appel installé connecté, audio bidirectionnel, sous-titres et barge-in |
-| 2 — AgentConsult | terminé pour un bot ; multi-bot restant | délégation réelle à Luna Max et résultat reparlé par la couche vocale |
-| 3 — Contrôle continu | terminé pour une tâche active | status, steer, follow-up et cancel liés à la session vocale et au tour actif |
+| 2 — AgentConsult | multi-bot livré | catalogue borné, cible explicite, routage par nom et exécution parallèle par bot |
+| 3 — Contrôle continu | multi-tâche livré | status multi-bot, contrôle ciblé, file par bot, tâches conservées après raccrochage |
 | 4 — Approbations | terminé côté code et tests | confirmation exacte, expiration et propriété `threadId`/`requestId` |
-| 5 — Kenpachi/UX | partiel | wake et réarmement livrés ; panneau global/navigation vocale livrés, orchestration vocale multi-bot restante |
+| 5 — Kenpachi/UX | partiel | wake, dock global, navigation et orchestration multi-bot livrés ; journal/mémoire vocale en cours |
 | 6 — Retrait legacy | terminé | aucune clé ElevenLabs requise ; TTS ponctuel local macOS seulement |
 
 L'état ne doit plus être résumé comme « Jarvis terminé ». Le transport et le
@@ -31,8 +31,18 @@ WebRTC global à la fenêtre : changer de conversation ne le démonte plus, le c
 reste utilisable sous un panneau compact, un second appel concurrent est refusé
 avant l'API, et les commandes explicites « Ouvre/Affiche/Va sur <bot> » changent
 la conversation visible localement. Le prochain lot requis pour un vrai Jarvis
-est le catalogue vocal de cibles, la délégation explicite à un autre bot et le
-suivi parallèle de plusieurs tâches avec propriété séparée des approbations.
+était le catalogue vocal de cibles, la délégation explicite à un autre bot et le
+suivi parallèle de plusieurs tâches. Ce lot est maintenant implémenté côté
+serveur et UI : `target_id` validé contre le catalogue, inférence prudente des
+phrases « Demande à <bot> », une file par bot, parallélisme entre bots, status
+global après reconnexion et résultats GA sérialisés. Le smoke test installé a
+réussi : appel Luna actif, délégation Realtime avec l'ID exact de Codex, Luna et
+Codex visibles simultanément dans le dock, puis résultat exact
+`VOICE_MULTI_TARGET_OK` dans la conversation Codex. Le lot est donc livré.
+
+La continuité de voix ajoute maintenant un journal local borné des segments
+finalisés, sans audio brut, et injecte seulement une carte compacte des appels
+récents dans la session suivante.
 
 Recette live du 15 août 2026 sur l'application réellement installée :
 

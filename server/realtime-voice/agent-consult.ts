@@ -10,6 +10,7 @@ type Target = {
 
 type ActiveRun = {
   generation: number;
+  voiceSessionId: string;
   targetId: string;
   threadId: string;
   startedAt: number;
@@ -26,11 +27,18 @@ type HarnessAgentConsultDeps = {
 };
 
 export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
+  // A voice call is a controller, not the lifetime owner of agent work. Keep
+  // one active run per target so different bots can work in parallel and a
+  // reconnecting/new voice session can still query or cancel that work.
   private readonly active = new Map<string, ActiveRun>();
   private readonly deps: HarnessAgentConsultDeps;
   private generation = 0;
 
   constructor(deps: HarnessAgentConsultDeps) { this.deps = deps; }
+
+  activeTargets(): string[] {
+    return [...this.active.keys()];
+  }
 
   run(input: Parameters<AgentConsultRuntime["run"]>[0]): Promise<{ text: string }> {
     const target = this.deps.resolveTarget(input.targetId);
@@ -39,12 +47,13 @@ export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
     const generation = ++this.generation;
     const run: ActiveRun = {
       generation,
+      voiceSessionId: input.voiceSessionId,
       targetId: input.targetId,
       threadId: target.threadId,
       startedAt: Date.now(),
       progress: "Starting the selected OpenMaus bot",
     };
-    this.active.set(input.voiceSessionId, run);
+    this.active.set(input.targetId, run);
 
     return new Promise((resolve, reject) => {
       let text = "";
@@ -55,7 +64,7 @@ export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
         clearTimeout(abortTimer);
         unsubscribe();
         input.signal.removeEventListener("abort", onAbort);
-        if (this.active.get(input.voiceSessionId)?.generation === generation) this.active.delete(input.voiceSessionId);
+        if (this.active.get(input.targetId)?.generation === generation) this.active.delete(input.targetId);
       };
       const finish = (error?: Error) => {
         if (settled) return;
@@ -115,8 +124,8 @@ export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
     mode: AgentControlMode;
     text: string;
   }): Promise<AgentControlResult> {
-    const run = this.active.get(input.voiceSessionId);
-    if (!run || run.targetId !== input.targetId) {
+    const run = this.active.get(input.targetId);
+    if (!run) {
       return { ok: false, message: "There is no active delegated task." };
     }
     const target = this.deps.resolveTarget(run.targetId);

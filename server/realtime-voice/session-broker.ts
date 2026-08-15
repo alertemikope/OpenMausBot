@@ -7,14 +7,16 @@ import type {
   AgentControlMode,
   AgentControlResult,
   AgentConsultRuntime,
+  LiveTargetDescriptor,
   LiveSessionCreateRequest,
   LiveSessionCreated,
   LiveSessionPublic,
   OAuthAccessProvider,
 } from "./contracts.ts";
 import { LIVE_MODEL } from "./contracts.ts";
-import { buildLiveSession, createLiveCall, type LiveRequestIds } from "./openai-live-wire.ts";
+import { buildLiveSession, createLiveCall, parseLiveEvent, type LiveRequestIds } from "./openai-live-wire.ts";
 import { connectLiveSideband, type LiveSidebandSocket } from "./sideband.ts";
+import { VoiceTranscriptStore, type VoiceTranscript, type VoiceTranscriptEntry } from "./transcript-store.ts";
 
 const OFFER_TTL_MS = 60_000;
 const SESSION_TTL_MS = 30 * 60_000;
@@ -31,14 +33,18 @@ type Session = LiveSessionPublic & {
   requestIds: LiveRequestIds;
   listeners: Set<(payload: string) => void>;
   outboundEvents: string[];
+  startedAt: number;
+  transcript: VoiceTranscriptEntry[];
 };
 
 type BrokerOptions = {
   targetExists: (targetId: string) => boolean;
+  listTargets?: () => LiveTargetDescriptor[];
   oauth: OAuthAccessProvider;
   createCall?: typeof createLiveCall;
   connectSideband?: typeof connectLiveSideband;
   runAgentConsult: AgentConsultRuntime["run"];
+  activeAgentTargets?: () => string[];
   controlAgent: (input: { voiceSessionId: string; targetId: string; mode: AgentControlMode; text: string }) => Promise<AgentControlResult>;
   respondToRequest: (input: { targetId: string; threadId: string; requestId: string; behavior: "allow" | "deny" }) => Promise<void>;
 };
@@ -67,8 +73,12 @@ export class RealtimeSessionBroker {
   private readonly sessions = new Map<string, Session>();
   private readonly offerSessions = new Map<string, string>();
   private readonly options: BrokerOptions;
+  private readonly transcriptStore: VoiceTranscriptStore;
 
-  constructor(options: BrokerOptions) { this.options = options; }
+  constructor(options: BrokerOptions & { transcriptStore?: VoiceTranscriptStore }) {
+    this.options = options;
+    this.transcriptStore = options.transcriptStore ?? new VoiceTranscriptStore();
+  }
 
   createSession(request: LiveSessionCreateRequest): LiveSessionCreated {
     this.prune();
@@ -90,6 +100,8 @@ export class RealtimeSessionBroker {
       requestIds: { realtimeSessionId: randomUUID(), sessionId: randomUUID(), threadId: randomUUID() },
       listeners: new Set(),
       outboundEvents: [],
+      startedAt: now,
+      transcript: [],
       timer: setTimeout(() => void this.closeSession(sessionId), OFFER_TTL_MS),
     };
     session.timer.unref?.();
@@ -103,6 +115,13 @@ export class RealtimeSessionBroker {
     return session
       ? { sessionId: session.sessionId, targetId: session.targetId, state: session.state, expiresAt: session.expiresAt }
       : undefined;
+  }
+
+  list(): LiveSessionPublic[] {
+    this.prune();
+    return [...this.sessions.values()]
+      .map((session) => this.describe(session.sessionId))
+      .filter((session): session is LiveSessionPublic => Boolean(session));
   }
 
   async acceptOffer(offerToken: string, offerSdp: string): Promise<{ answerSdp: string; transport: "gpt-live" | "ga-realtime"; model: string }> {
@@ -123,15 +142,22 @@ export class RealtimeSessionBroker {
       assertAudioOnlyOffer(offerSdp);
       session.state = "connecting";
       const auth = await this.options.oauth.resolveAccess(session.abort.signal);
+      const targets = (this.options.listTargets?.() ?? [])
+        .filter((target) => target.id && target.name && this.options.targetExists(target.id))
+        .slice(0, 24);
+      const liveSession = buildLiveSession({
+        model: LIVE_MODEL,
+        voice: session.request.voice,
+        language: session.request.language,
+        initialText: session.request.initialText,
+        targets,
+        defaultTargetId: session.targetId,
+        recentCallContext: this.transcriptStore.recentContext(),
+      });
       const call = await (this.options.createCall ?? createLiveCall)({
         auth,
         offerSdp,
-        session: buildLiveSession({
-          model: LIVE_MODEL,
-          voice: session.request.voice,
-          language: session.request.language,
-          initialText: session.request.initialText,
-        }),
+        session: liveSession,
         requestIds: session.requestIds,
         signal: AbortSignal.any([session.abort.signal, AbortSignal.timeout(30_000)]),
       });
@@ -154,9 +180,11 @@ export class RealtimeSessionBroker {
       const delegations = new LiveDelegationController({
         voiceSessionId: session.sessionId,
         targetId: session.targetId,
+        targets,
         socket,
         transport: call.kind,
         runtime: { run: this.options.runAgentConsult },
+        activeTargets: this.options.activeAgentTargets,
         control: this.options.controlAgent,
         respondToRequest: this.options.respondToRequest,
         onFatal: () => void this.closeSession(session.sessionId),
@@ -165,7 +193,7 @@ export class RealtimeSessionBroker {
         },
       });
       if (call.kind === "gpt-live") {
-        socket.on("message", (payload) => delegations.handle(payload));
+        socket.on("message", (payload) => this.handleProviderPayload(session, String(payload)));
         socket.on("error", () => void this.closeSession(session.sessionId));
         socket.on("close", () => void this.closeSession(session.sessionId));
       }
@@ -176,12 +204,7 @@ export class RealtimeSessionBroker {
       session.timer = setTimeout(() => void this.closeSession(session.sessionId), remaining);
       session.timer.unref?.();
       if (call.kind === "ga-realtime") {
-        for (const event of buildGaRealtimeSetup(buildLiveSession({
-          model: LIVE_MODEL,
-          voice: session.request.voice,
-          language: session.request.language,
-          initialText: session.request.initialText,
-        }))) socket.send(JSON.stringify(event));
+        for (const event of buildGaRealtimeSetup(liveSession, targets)) socket.send(JSON.stringify(event));
       }
       return { answerSdp: call.answerSdp, transport: call.kind, model: call.model };
     } catch (error) {
@@ -200,6 +223,13 @@ export class RealtimeSessionBroker {
     session.abort.abort(new Error("Realtime session closed"));
     session.delegations?.stop();
     session.socket?.close(1000, "session closed");
+    this.transcriptStore.save({
+      sessionId: session.sessionId,
+      targetId: session.targetId,
+      startedAt: session.startedAt,
+      endedAt: Date.now(),
+      entries: session.transcript,
+    });
     return true;
   }
 
@@ -213,8 +243,16 @@ export class RealtimeSessionBroker {
   ingestEvent(sessionId: string, payload: string): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.delegations || session.state !== "live" || Buffer.byteLength(payload) > 1024 * 1024) return false;
-    session.delegations.handle(payload);
+    this.handleProviderPayload(session, payload);
     return true;
+  }
+
+  history(limit = 20): VoiceTranscript[] {
+    return this.transcriptStore.list(limit);
+  }
+
+  transcript(sessionId: string): VoiceTranscript | undefined {
+    return this.transcriptStore.get(sessionId);
   }
 
   subscribe(sessionId: string, listener: (payload: string) => void): (() => void) | undefined {
@@ -239,9 +277,20 @@ export class RealtimeSessionBroker {
       }
     }
   }
+
+  private handleProviderPayload(session: Session, payload: string): void {
+    const event = parseLiveEvent(payload);
+    if (event?.kind === "transcript" && event.done && event.text.trim()) {
+      const entry: VoiceTranscriptEntry = { role: event.role, text: event.text.trim().slice(0, 8_000), at: Date.now() };
+      const previous = session.transcript.at(-1);
+      if (!previous || previous.role !== entry.role || previous.text !== entry.text) session.transcript.push(entry);
+      if (session.transcript.length > 200) session.transcript.splice(0, session.transcript.length - 200);
+    }
+    session.delegations?.handle(payload);
+  }
 }
 
-function buildGaRealtimeSetup(live: ReturnType<typeof buildLiveSession>): Record<string, unknown>[] {
+function buildGaRealtimeSetup(live: ReturnType<typeof buildLiveSession>, targets: LiveTargetDescriptor[] = []): Record<string, unknown>[] {
   const gaInstructions = live.instructions
     .split("\n")
     .filter((line) => !line.includes("[OPENMAUS_CONTROL:"))
@@ -256,6 +305,7 @@ function buildGaRealtimeSetup(live: ReturnType<typeof buildLiveSession>): Record
         "Use agent_consult for status, cancellation, steering, follow-ups, and permission decisions too.",
         "Set agent_consult.mode from the user's intent: task for new work, status for progress, cancel to stop, steer to redirect now, followup to queue later. Never turn a status request into a new task.",
         "When the layer asks the user for an exact yes/no permission confirmation, do not call agent_consult for the confirmation utterance. The trusted transcript handler resolves it; only acknowledge naturally.",
+        targets.length ? `For work assigned to a named agent, set target_id to its exact id from this catalog: ${targets.map((target) => `${target.name}=${target.id}`).join(", ")}.` : "",
       ].join("\n"),
       audio: {
         input: {
@@ -277,6 +327,11 @@ function buildGaRealtimeSetup(live: ReturnType<typeof buildLiveSession>): Record
               description: "Use task for new work, status/cancel/steer for the active delegated task, and followup for work to run afterward.",
             },
             prompt: { type: "string", description: "The complete user request for the selected agent. Preserve its control intent." },
+            target_id: {
+              type: "string",
+              ...(targets.length ? { enum: targets.map((target) => target.id) } : {}),
+              description: "Exact OpenMaus agent id. Omit only to use the default call agent.",
+            },
           },
           required: ["mode", "prompt"],
           additionalProperties: false,

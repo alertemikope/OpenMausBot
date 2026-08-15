@@ -157,9 +157,21 @@ cannot create a second server session. Its compact, minimizable dock leaves the
 sidebar, transcript, and composer interactive. While the call is live, explicit
 completed utterances such as “Ouvre Codex”, “Affiche Luna Max”, or “Va sur
 Milind” select that visible conversation locally; ordinary task language is
-never interpreted as UI navigation. Cross-bot delegation and concurrent task
-ownership remain a separate router milestone rather than being implied by UI
-navigation.
+never interpreted as UI navigation.
+
+Cross-bot delegation uses a bounded server-provided catalog. GA Realtime calls
+carry an optional exact `target_id`; GPT-Live client delegations carry the
+equivalent `[OPENMAUS_TARGET:id]` marker. Different bots may work concurrently,
+while a second request for the same bot queues behind its active turn. Status
+can cover all active bots or one named bot, and ambiguous cancel/steer commands
+require a target rather than choosing destructively.
+
+Completed user and assistant transcript segments are stored locally under
+`~/.openmausbot/voice-calls/` when the call closes. Raw audio is never stored.
+`GET /api/realtime/history` returns the bounded recent-call timeline and the
+next Realtime session receives only a short recent-call map, not full transcript
+replay. `GET /api/realtime/history/:sessionId` expands one local transcript.
+Closing the voice line stops capture/playback but does not cancel harness tasks.
 
 ## Message playback
 

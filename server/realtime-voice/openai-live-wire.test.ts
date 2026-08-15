@@ -93,6 +93,23 @@ describe("GPT-Live wire", () => {
       call_id: "call-1",
       arguments: JSON.stringify({ mode: "status", prompt: "Check the agent" }),
     }))).toEqual({ kind: "delegation", id: "call-1", prompt: "Check the agent", mode: "status" });
+    expect(parseLiveEvent(JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "agent_consult",
+      call_id: "call-2",
+      arguments: JSON.stringify({ mode: "task", target_id: "codex", prompt: "Review this" }),
+    }))).toEqual({ kind: "delegation", id: "call-2", prompt: "Review this", targetId: "codex", mode: "task" });
+    expect(parseLiveEvent(JSON.stringify({
+      type: "delegation.created",
+      item: { type: "delegation", target: "client", id: "d2", content: [{ type: "input_text", text: "[OPENMAUS_TARGET:codex] Review this" }] },
+    }))).toEqual({ kind: "delegation", id: "d2", prompt: "Review this", targetId: "codex" });
+    expect(parseLiveEvent(JSON.stringify({ type: "response.done", response: { status: "completed" } }))).toEqual({ kind: "response-finished" });
+    expect(parseLiveEvent(JSON.stringify({ type: "response.output_audio_transcript.done", transcript: "Terminé" }))).toEqual({
+      kind: "transcript",
+      role: "assistant",
+      text: "Terminé",
+      done: true,
+    });
     expect(parseLiveEvent(JSON.stringify({ type: "error", status: 401, error: { message: "expired" } }))).toEqual({
       kind: "error",
       message: "expired",
