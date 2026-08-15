@@ -20,6 +20,9 @@ export function VoiceSettings() {
   const [error, setError] = useState<string | null>(null);
   const [voices, setVoices] = useState<Array<{ id: string; label: string; description?: string }>>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
+  const [wake, setWake] = useState<WakeWordState | null>(null);
+  const [wakePhrase, setWakePhrase] = useState("Kenpachi");
+  const [savingWake, setSavingWake] = useState(false);
 
   const configured = Boolean(tts?.configured);
 
@@ -43,6 +46,26 @@ export function VoiceSettings() {
     };
   }, [configured]);
 
+  useEffect(() => {
+    const bridge = window.ogb;
+    if (!bridge?.wakeGet) return;
+    let alive = true;
+    void bridge.wakeGet().then((value) => {
+      if (!alive) return;
+      setWake(value);
+      setWakePhrase(value.phrase);
+    });
+    const off = bridge.onWakeState?.((value) => {
+      if (!alive) return;
+      setWake(value);
+      setWakePhrase(value.phrase);
+    });
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, []);
+
   const save = (patch: Record<string, unknown>) => {
     setSaving(true);
     setError(null);
@@ -55,9 +78,26 @@ export function VoiceSettings() {
       .finally(() => setSaving(false));
   };
 
+  const saveWake = async (patch: { enabled?: boolean; phrase?: string }) => {
+    const bridge = window.ogb;
+    if (!bridge?.wakeConfigure) return;
+    setSavingWake(true);
+    setError(null);
+    try {
+      const value = await bridge.wakeConfigure(patch);
+      setWake(value);
+      setWakePhrase(value.phrase);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSavingWake(false);
+    }
+  };
+
   if (!tts) return null;
 
   return (
+    <div className="space-y-3">
     <div className="rounded-xl bg-card p-4">
       <div className="text-[15px] font-medium text-ink">Voice</div>
       <div className="mt-0.5 text-[13px] text-ink-secondary">
@@ -134,6 +174,73 @@ export function VoiceSettings() {
       )}
 
       {error && <div className="mt-2 text-[12px] text-danger">{error}</div>}
+    </div>
+    {wake?.available && (
+      <div className="rounded-xl bg-card p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-[15px] font-medium text-ink">Wake word</div>
+            <div className="mt-0.5 text-[13px] text-ink-secondary">
+              Listen locally for a phrase, open the selected bot's call, and send the command that follows it.
+              Audio stays on this Mac.
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={wake.enabled}
+            onClick={() => void saveWake({ enabled: !wake.enabled, phrase: wakePhrase })}
+            disabled={savingWake}
+            className={cn(
+              "relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50",
+              wake.enabled ? "bg-accent" : "bg-raised-hover",
+            )}
+          >
+            <span
+              className={cn(
+                "absolute top-0.5 size-5 rounded-full bg-white shadow-sm transition-all",
+                wake.enabled ? "left-[22px]" : "left-0.5",
+              )}
+            />
+          </button>
+        </div>
+        <div className="mt-4 flex gap-2">
+          <input
+            value={wakePhrase}
+            onChange={(event) => setWakePhrase(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && wakePhrase.trim()) void saveWake({ phrase: wakePhrase });
+            }}
+            maxLength={48}
+            aria-label="Wake phrase"
+            placeholder="Kenpachi"
+            className="w-full rounded-lg border border-hairline/40 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-hairline focus:outline-none"
+          />
+          <button
+            onClick={() => void saveWake({ phrase: wakePhrase })}
+            disabled={savingWake || !wakePhrase.trim() || wakePhrase.trim() === wake.phrase}
+            className="flex w-[72px] shrink-0 items-center justify-center gap-1.5 rounded-lg bg-raised py-2 text-[13px] text-ink hover:bg-raised-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {savingWake ? <Loader2 size={13} className="animate-spin" /> : <><Check size={13} />Save</>}
+          </button>
+        </div>
+        <div className="mt-2 flex items-center gap-2 text-[12px] text-ink-secondary">
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              wake.listening ? "bg-success" : wake.error ? "bg-danger" : "bg-raised-hover",
+            )}
+          />
+          {wake.error
+            ? wake.error
+            : wake.listening
+              ? `Listening for “${wake.phrase}”`
+              : wake.enabled && wake.suspended
+                ? "Paused while a call or dictation session owns the microphone"
+                : "Off"}
+        </div>
+      </div>
+    )}
     </div>
   );
 }

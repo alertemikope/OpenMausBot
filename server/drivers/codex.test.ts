@@ -203,6 +203,41 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.env.OPENMAUSBOT_GWS_PATH).toBe("/opt/homebrew/bin/gws");
   });
 
+  it("mounts Pi Memory without putting its Keychain token in argv", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-pi-memory",
+      text: "recall the user's preferences",
+      integrations: {
+        memory: {
+          command: process.execPath,
+          args: ["/opt/pi-memory-hub/dist/mcp/main.js"],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PI_CODING_AGENT_DIR: "/Users/test/.pi/agent",
+          },
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toEqual([
+      "-c",
+      `mcp_servers.pi_memory.command=${JSON.stringify(process.execPath)}`,
+      "-c",
+      'mcp_servers.pi_memory.args=["/opt/pi-memory-hub/dist/mcp/main.js"]',
+      "-c",
+      'mcp_servers.pi_memory.env_vars=["ELECTRON_RUN_AS_NODE","PI_CODING_AGENT_DIR"]',
+      "app-server",
+    ]);
+    expect(seen.argv.join(" ")).not.toContain("PI_MEMORY_HUB_TOKEN");
+    expect(seen.env.PI_CODING_AGENT_DIR).toBe("/Users/test/.pi/agent");
+  });
+
   it("mounts explicit This Mac or Local VM Cua MCP without leaking its environment", async () => {
     await create();
     const dump = join(scratch, "dump.json");

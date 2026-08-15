@@ -130,6 +130,10 @@ Press the speaker on any reply, or switch a bot to read its answers out as they 
 to what ran overnight while you make breakfast. Hit **call** and it's a conversation: it hears you, tells
 you what it's doing while it works, and asks for approvals out loud.
 
+On macOS, enable a local wake phrase in App Settings and say **“Kenpachi”**, pause, then give a command.
+OpenMausBot opens the selected bot or room as a call, sends the command, and keeps the conversation going.
+The passive listener uses Apple's on-device speech recognition and stores no audio.
+
 Bring your own ElevenLabs key — paste it once in App Settings, pick a voice, and every bot can talk.
 Give a bot its own voice and a room stops sounding like one person.
 
@@ -244,6 +248,17 @@ pnpm check:electron # syntax-check Electron main/preload files
 pnpm package:win   # Windows installer + zip → release/
 pnpm package:linux # Ubuntu x64 .deb + AppImage → release/
 ```
+
+### Optional shared Pi memory
+
+When Pi Memory Hub is present in Pi's configured local packages,
+OpenMausBot automatically mounts its existing MCP bridge on Codex, Claude, and
+ACP engines. Bots can search durable memories and Obsidian knowledge, and can
+write/correct/archive explicit durable facts without creating a second store.
+Markdown/Obsidian remains canonical; Qdrant remains a reconstructible index,
+and the bearer token stays in the macOS Keychain or Pi's mode-600 client file.
+Set `OPENMAUSBOT_PI_MEMORY_MCP` to an absolute `dist/mcp/main.js` path to
+override discovery, or to a missing path to disable it explicitly.
 
 ## Status
 

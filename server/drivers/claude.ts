@@ -278,6 +278,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpServers.google_workspace = { ...turn.integrations.googleWorkspace };
         allowed.push("mcp__google_workspace");
       }
+      if (turn.integrations?.memory) {
+        mcpServers.pi_memory = { ...turn.integrations.memory };
+        allowed.push("mcp__pi_memory");
+      }
       if (turn.integrations?.computer) {
         mcpServers.computer = {
           command: process.execPath,
@@ -502,7 +506,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "in-session", agentsMcp: true, computerMcp: true },
+        capabilities: { sessionModelSwitch: "in-session", stdioMcp: true, agentsMcp: true, computerMcp: true },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {

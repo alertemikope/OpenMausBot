@@ -155,6 +155,11 @@ describe("ClaudeDriver turns (fake CLI)", () => {
           args: ["/fake/google-workspace-mcp.js"],
           env: { OPENMAUSBOT_GWS_PATH: "/fake/gws" },
         },
+        memory: {
+          command: process.execPath,
+          args: ["/fake/pi-memory-mcp.js"],
+          env: { PI_CODING_AGENT_DIR: "/fake/pi-agent" },
+        },
       },
     });
     await recorder.until((e) => e.type === "turn.completed");
@@ -169,9 +174,14 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       args: ["/fake/google-workspace-mcp.js"],
       env: { OPENMAUSBOT_GWS_PATH: "/fake/gws" },
     });
+    expect(mcpConfig.mcpServers.pi_memory).toMatchObject({
+      args: ["/fake/pi-memory-mcp.js"],
+      env: { PI_CODING_AGENT_DIR: "/fake/pi-agent" },
+    });
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
     expect(allowed).toContain("mcp__google_workspace");
+    expect(allowed).toContain("mcp__pi_memory");
   });
 
   it("resumes with --resume when a cursor exists and reports that session id", async () => {

@@ -28,6 +28,7 @@ export function startCall(targetId: string) {
   // old overlay may not unmount until React's next render.
   speaker.stop();
   void window.ogb?.speechStop();
+  void window.ogb?.wakeSetCallActive?.(true);
   current = targetId;
   notify();
 }
@@ -40,6 +41,7 @@ export function endCall(targetId?: string): boolean {
   current = null;
   speaker.stop();
   void window.ogb?.speechStop();
+  void window.ogb?.wakeSetCallActive?.(false);
   notify();
   return true;
 }

@@ -117,7 +117,7 @@ describe("ACP turns (fake CLI)", () => {
     expect(seen.env.XAI_API_KEY).toBeUndefined();
   });
 
-  it("mounts the direct Google Workspace stdio MCP contract", async () => {
+  it("mounts direct Google Workspace and Pi Memory stdio MCP contracts", async () => {
     await create();
     const dump = join(scratch, "google-mcp.json");
     process.env.FAKE_ACP_DUMP = dump;
@@ -131,6 +131,11 @@ describe("ACP turns (fake CLI)", () => {
           args: ["/fake/google-workspace-mcp.js"],
           env: { OPENMAUSBOT_GWS_PATH: "/fake/gws", ELECTRON_RUN_AS_NODE: "1" },
         },
+        memory: {
+          command: process.execPath,
+          args: ["/fake/pi-memory-mcp.js"],
+          env: { PI_CODING_AGENT_DIR: "/fake/pi-agent", ELECTRON_RUN_AS_NODE: "1" },
+        },
       },
     });
     await recorder.until((e) => e.type === "turn.completed");
@@ -142,6 +147,15 @@ describe("ACP turns (fake CLI)", () => {
       args: ["/fake/google-workspace-mcp.js"],
       env: [
         { name: "OPENMAUSBOT_GWS_PATH", value: "/fake/gws" },
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+      ],
+    });
+    expect(seen.mcpServers).toContainEqual({
+      name: "pi_memory",
+      command: process.execPath,
+      args: ["/fake/pi-memory-mcp.js"],
+      env: [
+        { name: "PI_CODING_AGENT_DIR", value: "/fake/pi-agent" },
         { name: "ELECTRON_RUN_AS_NODE", value: "1" },
       ],
     });

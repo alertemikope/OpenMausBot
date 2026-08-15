@@ -21,6 +21,20 @@ contextBridge.exposeInMainWorld("ogb", {
     ipcRenderer.on("speech:end", handler);
     return () => ipcRenderer.removeListener("speech:end", handler);
   },
+  wakeGet: () => ipcRenderer.invoke("wake:get"),
+  wakeConfigure: (patch) => ipcRenderer.invoke("wake:configure", patch),
+  wakeSetCallActive: (active) => ipcRenderer.invoke("wake:call-active", active),
+  wakeResumeTrigger: () => ipcRenderer.invoke("wake:resume-trigger"),
+  onWakeState: (cb) => {
+    const handler = (_event, value) => cb(value);
+    ipcRenderer.on("wake:state", handler);
+    return () => ipcRenderer.removeListener("wake:state", handler);
+  },
+  onWakeCommand: (cb) => {
+    const handler = (_event, value) => cb(value);
+    ipcRenderer.on("wake:command", handler);
+    return () => ipcRenderer.removeListener("wake:command", handler);
+  },
   /** Absolute path of a dropped File — Electron 32 removed File.path, and
    * only the preload can ask. "" when the drag carried no file on disk. */
   getPathForFile: (file) => {

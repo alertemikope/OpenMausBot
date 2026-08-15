@@ -14,6 +14,7 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
+import { startCall } from "@/lib/call";
 
 function Shell() {
   const { state, dispatch } = useStore();
@@ -58,6 +59,25 @@ function Shell() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [state.bots, state.selectedId, dispatch]);
+
+  // A passive local wake turn enters the existing call surface rather than a
+  // second voice stack: the same bot, permissions, narration and approvals
+  // remain authoritative. The native listener has already released the mic.
+  useEffect(() => {
+    const bridge = window.ogb;
+    if (!bridge?.onWakeCommand) return;
+    return bridge.onWakeCommand(({ text }) => {
+      const target = group ?? bot;
+      if (!target || !text.trim()) {
+        void bridge.wakeResumeTrigger?.();
+        return;
+      }
+      dispatch({ type: "select", id: target.id });
+      startCall(target.id);
+      if (group) dispatch({ type: "sendGroup", groupId: group.id, text });
+      else dispatch({ type: "send", botId: target.id, text });
+    });
+  }, [bot, dispatch, group]);
 
   return (
     <div className="flex h-full flex-col">

@@ -170,6 +170,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: acpEnv(googleWorkspace.env),
           });
         }
+        const memory = turn.integrations?.memory;
+        if (memory) {
+          servers.push({
+            name: "pi_memory",
+            command: memory.command,
+            args: memory.args,
+            env: acpEnv(memory.env),
+          });
+        }
         // The bot's computer, mounted exactly like the Claude driver does.
         // Cloud boxes use the REST adapter; host and sandbox Cua connections
         // expose Cua Driver's official MCP server directly.
@@ -540,7 +549,7 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
         snapshot,
         adapter: {
           provider: DRIVER_KIND,
-          capabilities: { sessionModelSwitch: "unsupported", agentsMcp: true, computerMcp: true },
+          capabilities: { sessionModelSwitch: "unsupported", stdioMcp: true, agentsMcp: true, computerMcp: true },
           sendTurn,
           interruptTurn: async (threadId) => active.get(threadId)?.interrupt(),
           respondToRequest: async (threadId, requestId, decision) => {

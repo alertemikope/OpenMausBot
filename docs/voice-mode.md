@@ -80,6 +80,54 @@ voice choice is a quality decision, not a latency one. The way to make a call
 feel conversational is to put the bot you call on a fast model and let it
 delegate real work to specialists over `ask_bot` — no new machinery required.
 
+## Wake word
+
+The macOS desktop can optionally keep the same signed Apple Speech helper in a
+passive, on-device mode. The default phrase is **“Kenpachi”** and the feature is
+off until the user enables it in App Settings.
+
+```
+“Kenpachi” → short pause → command
+                         ↓
+             selected bot/room call
+                         ↓
+              existing agent + tools
+```
+
+There is deliberately no second agent behind the listener. Electron receives
+only the completed text command, opens the existing call surface, and sends it
+through the normal harness. The selected bot therefore keeps its Codex/Claude
+session, MCPs, approvals, Google/Pennylane access, shared Pi memory, computer
+and voice.
+
+The listener releases the microphone as soon as it recognizes a command. It is
+suspended while dictation or a call owns capture, then rearmed after hang-up.
+Three consecutive helper failures stop automatic restart and surface a visible
+error instead of spinning in the background.
+
+The phrase/gap design is adapted from OpenClaw's `SwabbleKit` and macOS voice
+wake implementation under the MIT License. Attribution is in
+`THIRD_PARTY_NOTICES.md`.
+
+## Reference projects
+
+- **OpenClaw** has the most complete realtime speech-to-speech and
+  agent-consult architecture. Its wake gate and lifecycle fit here; its full
+  gateway/plugin runtime does not. Realtime voice remains a separate optional
+  provider, not a replacement for the current harness.
+- **Hermes** validates the simpler wake → STT → same agent → TTS product shape.
+  Its Python wake backends are not bundled because Apple Speech already gives
+  the signed macOS app a dependency-free local path.
+- **Talkify** is useful as a reference for macOS 26+'s `SpeechAnalyzer`, warm
+  language models and tested dictation state machine. The current production
+  helper keeps `SFSpeechRecognizer` compatibility; migrating normal dictation
+  to `SpeechAnalyzer` should retain a fallback for older supported macOS.
+- **OpenJarvis** contributes scheduling, digest, monitoring and memory patterns.
+  OpenMausBot's routines and Chief of Staff already own scheduling and agent
+  delegation. Its existing Pi Memory Hub owns durable memory, with Obsidian as
+  the canonical store and Qdrant as a derived index, so those patterns extend
+  the existing owners rather than add a second runtime or database.
+
 ## Rejected
 
 | Option | Why not |
@@ -89,7 +137,7 @@ delegate real work to specialists over `ask_bot` — no new machinery required.
 | Kokoro-82M in the renderer | Genuinely good and free, but it is a second provider, a 2.2MB chunk, an ONNX runtime and a first-run model download. Simplicity won. |
 | Cartesia | Cheaper and faster to first byte, but a second provider earns its keep only once one is not enough |
 | ElevenLabs Agents | Its custom-LLM `cascade_timeout_seconds` maxes at 15s and agent turns exceed that; it also wants to own turn-taking and tool calls, which is what the harness owns |
-| OpenAI Realtime / Gemini Live (speech-to-speech) | They replace the brain, and the brain being Claude Code on your own machine *is* the product |
+| Realtime speech model as the only brain | It would replace the local agent and its tools. A thin voice surface that delegates substantive work to the selected bot is the acceptable architecture. |
 
 ## Known gaps
 
@@ -98,6 +146,11 @@ delegate real work to specialists over `ask_bot` — no new machinery required.
 - **No spend meter.** ElevenLabs bills per character. Auto-speak is off by
   default partly for that reason, but the app should eventually show usage.
 - **No voice barge-in** — see half-duplex above.
+- The wake phrase is a local speech-text gate, not a dedicated low-power DSP
+  keyword model. A distinctive phrase and required pause reduce accidental
+  activation; environments with constant speech may prefer leaving it off.
+- OpenAI/Gemini realtime speech-to-speech is not yet exposed as an optional
+  call provider.
 
 ## Failure boundaries
 

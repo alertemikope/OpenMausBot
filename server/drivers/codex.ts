@@ -113,6 +113,11 @@ function appServerArgs(turn: SendTurnInput, env: Record<string, string | undefin
     appendStdioMcp(args, env, "google_workspace", googleWorkspace);
   }
 
+  const memory = turn.integrations?.memory;
+  if (memory) {
+    appendStdioMcp(args, env, "pi_memory", memory);
+  }
+
   // Both explicit computer destinations use the same MCP name. A cloud box
   // rides OpenMausBot's REST bridge; This Mac and Local VM hand Codex Cua
   // Driver's official stdio MCP contract directly.
@@ -507,6 +512,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         provider: DRIVER_KIND,
         capabilities: {
           sessionModelSwitch: "unsupported",
+          stdioMcp: true,
           computerMcp: true,
           // Access to the host Mac is powerful. Expose both explicit choices
           // in the UI, but never attach This Mac merely because a bot omitted

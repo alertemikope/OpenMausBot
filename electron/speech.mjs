@@ -53,10 +53,11 @@ function sendEnd(win, info) {
  * Start one recognition session. `endpointMs` is call-mode-only: composer
  * dictation deliberately keeps listening until its mic button is pressed.
  */
-export function startSpeech(win, options = {}) {
+export function startSpeech(win, options = {}, onSettled = () => {}) {
   stopSpeech();
   if (process.platform !== "darwin") {
     sendEnd(win, { code: 2, reason: "unsupported-platform" });
+    onSettled();
     return;
   }
   const requested = Number(options?.endpointMs);
@@ -69,6 +70,7 @@ export function startSpeech(win, options = {}) {
     ensureBuilt();
   } catch {
     sendEnd(win, { code: 1, reason: "helper-build-failed" });
+    onSettled();
     return;
   }
 
@@ -109,6 +111,7 @@ export function startSpeech(win, options = {}) {
   } catch {
     rmSync(sessionDir, { recursive: true, force: true });
     sendEnd(win, { code: 1, reason: "helper-start-failed" });
+    onSettled();
     return;
   }
 
@@ -151,6 +154,12 @@ export function startSpeech(win, options = {}) {
   watchFile(outputPath, { interval: 50, persistent: false }, drain);
 
   let cleaned = false;
+  let settled = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    onSettled();
+  };
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
@@ -160,6 +169,7 @@ export function startSpeech(win, options = {}) {
   proc.on("close", (code) => {
     drain();
     cleanup();
+    settle();
     // stopSpeech() clears child before creating the stop marker. Suppressing
     // that close event is essential in call mode: intentional TTS muting must
     // not look like the natural end of a spoken turn.
@@ -175,6 +185,7 @@ export function startSpeech(win, options = {}) {
   });
   proc.on("error", () => {
     cleanup();
+    settle();
     if (child !== speechSession) return;
     child = null;
     sendEnd(win, { code: 1, reason: "helper-start-failed" });

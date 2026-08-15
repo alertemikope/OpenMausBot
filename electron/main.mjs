@@ -4,6 +4,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startCua, stopCua, registerCuaIpc } from "./cua.mjs";
 import { finishSpeech, startSpeech, stopSpeech } from "./speech.mjs";
+import {
+  configureWakeWord,
+  getWakeWordState,
+  initializeWakeWord,
+  resumeWakeWord,
+  stopWakeWord,
+  suspendWakeWord,
+} from "./wake-word.mjs";
 import { openBlankTerminal } from "./terminal-launch.mjs";
 import { startUpdater, registerUpdaterIpc } from "./updater.mjs";
 import capabilitiesModule from "./capabilities.cjs";
@@ -147,6 +155,7 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
     },
   });
+  initializeWakeWord(win);
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -260,6 +269,7 @@ ipcMain.handle("perm:open-settings", (_event, pane) => {
   return shell.openExternal(`x-apple.systempreferences:com.apple.preference.security?${anchor}`);
 });
 
+let speechWakeGeneration = 0;
 ipcMain.handle("speech:start", (event, options) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win) return;
@@ -267,13 +277,28 @@ ipcMain.handle("speech:start", (event, options) => {
     win.webContents.send("speech:end", { code: 2, reason: "unsupported-platform" });
     return;
   }
-  startSpeech(win, options);
+  const generation = ++speechWakeGeneration;
+  suspendWakeWord("speech");
+  startSpeech(win, options, () => {
+    if (generation === speechWakeGeneration) resumeWakeWord("speech");
+  });
 });
 ipcMain.handle("speech:stop", () => {
   if (process.platform === "darwin") stopSpeech();
 });
 ipcMain.handle("speech:finish", () => {
   if (process.platform === "darwin") finishSpeech();
+});
+ipcMain.handle("wake:get", () => getWakeWordState());
+ipcMain.handle("wake:configure", (_event, patch) => configureWakeWord(patch));
+ipcMain.handle("wake:call-active", (_event, active) => {
+  if (active === true) suspendWakeWord("call");
+  else resumeWakeWord("call");
+  return getWakeWordState();
+});
+ipcMain.handle("wake:resume-trigger", () => {
+  resumeWakeWord("trigger");
+  return getWakeWordState();
 });
 
 ipcMain.handle("desktop:capabilities", async () =>
@@ -342,6 +367,7 @@ app.on("before-quit", (e) => {
   // a live dictation session runs its own helper child that holds the mic —
   // stop it here so quitting never orphans a recording process
   stopSpeech();
+  stopWakeWord();
   const cleanup = Promise.race([
     stopCua().catch(() => {}),
     new Promise((resolve) => setTimeout(resolve, CUA_STOP_TIMEOUT_MS).unref()),

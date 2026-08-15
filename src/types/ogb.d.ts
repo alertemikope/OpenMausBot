@@ -2,6 +2,15 @@
 export {};
 
 declare global {
+  type WakeWordState = {
+    available: boolean;
+    enabled: boolean;
+    listening: boolean;
+    suspended: boolean;
+    phrase: string;
+    error?: string;
+  };
+
   type DesktopCapabilities = {
     host: {
       platform: "darwin" | "linux" | "win32" | "other";
@@ -43,6 +52,12 @@ declare global {
         cb: (line: { partial?: boolean; text?: string; error?: string }) => void,
       ): () => void;
       onSpeechEnd(cb: (info: { code: number | null; reason?: string }) => void): () => void;
+      wakeGet?(): Promise<WakeWordState>;
+      wakeConfigure?(patch: { enabled?: boolean; phrase?: string }): Promise<WakeWordState>;
+      wakeSetCallActive?(active: boolean): Promise<WakeWordState>;
+      wakeResumeTrigger?(): Promise<WakeWordState>;
+      onWakeState?(cb: (state: WakeWordState) => void): () => void;
+      onWakeCommand?(cb: (command: { text: string; phrase: string }) => void): () => void;
       /** Absolute path of a dropped File ("" when the drag carried no
        * file on disk). Absent in older builds of the shell. */
       getPathForFile?(file: File): string;

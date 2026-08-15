@@ -104,6 +104,8 @@ export interface SendTurnInput {
     pennylane?: { command: string; args: string[]; env: Record<string, string> };
     /** Gmail, Drive, Calendar, Sheets, Docs, etc. through local gws OAuth. */
     googleWorkspace?: { command: string; args: string[]; env: Record<string, string> };
+    /** Canonical Markdown/Obsidian memory and Qdrant-backed knowledge RAG. */
+    memory?: { command: string; args: string[]; env: Record<string, string> };
     /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter. */
     computer?: { kind?: "box"; boxId: string; token: string };
     /** Direct stdio connection to a Cua Driver MCP server (host or sandbox). */
@@ -124,6 +126,9 @@ export interface ProviderAdapter {
   readonly provider: DriverKind;
   readonly capabilities: {
     sessionModelSwitch: "in-session" | "unsupported";
+    /** True when the driver can mount arbitrary turn-scoped stdio MCP
+     * integrations such as Google Workspace, Pennylane, and Pi Memory. */
+    stdioMcp?: boolean;
     /** True when the driver mounts turn.integrations.agents as MCP tools —
      * the harness only offers agents tooling (and prompts about it) to
      * drivers that can actually hand it to the agent. */

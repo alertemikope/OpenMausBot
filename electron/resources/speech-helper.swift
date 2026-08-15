@@ -11,6 +11,13 @@
 // request on silence by itself; it only produces `isFinal` after endAudio().
 // Composer dictation omits this flag and keeps its existing press-to-stop
 // behavior, while call mode opts into silence endpointing.
+//
+// `--wake-word PHRASE` keeps a local recognizer open until it hears PHRASE,
+// followed by a command and a short pause. It then emits one line shaped as
+// `{ "wake": true, "phrase": "…", "text": "…" }` and exits. Electron owns
+// restart/suspension so a call and the passive listener can never share the
+// microphone. The trigger/capture design is adapted from OpenClaw's MIT-
+// licensed VoiceWakeRuntime and SwabbleKit; see THIRD_PARTY_NOTICES.md.
 import AVFoundation
 import Foundation
 import Speech
@@ -37,6 +44,13 @@ let endpointMs: Int = {
     let value = Int(args[index + 1])
   else { return 0 }
   return min(5_000, max(250, value))
+}()
+
+let wakeWord: String? = {
+  let args = CommandLine.arguments
+  guard let index = args.firstIndex(of: "--wake-word"), index + 1 < args.count else { return nil }
+  let value = args[index + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+  return value.isEmpty ? nil : value
 }()
 
 let stopFile: String? = {
@@ -127,6 +141,146 @@ final class SilenceEndpointer {
   }
 }
 
+/// Passive wake listener. This intentionally uses the same on-device Apple
+/// recognizer as normal dictation: no recording is stored and no audio leaves
+/// the Mac. A distinctive configurable phrase keeps the text gate practical
+/// without shipping a second ML runtime or model.
+final class WakeWordListener {
+  private let phrase: String
+  private let recognizer: SFSpeechRecognizer
+  private let stopFile: String?
+  private let silenceGap: TimeInterval
+  private let queue = DispatchQueue(label: "com.openmausbot.speech.wake")
+  private var engine: AVAudioEngine?
+  private var request: SFSpeechAudioBufferRecognitionRequest?
+  private var task: SFSpeechRecognitionTask?
+  private var timer: DispatchSourceTimer?
+  private var armed = false
+  private var command = ""
+  private var lastTranscript = ""
+  private var lastChange = DispatchTime.now()
+  private var finished = false
+
+  init(phrase: String, recognizer: SFSpeechRecognizer, stopFile: String?, silenceGapMs: Int) {
+    self.phrase = phrase
+    self.recognizer = recognizer
+    self.stopFile = stopFile
+    silenceGap = Double(silenceGapMs) / 1_000
+  }
+
+  func start() {
+    startRecognition()
+    let source = DispatchSource.makeTimerSource(queue: queue)
+    source.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))
+    source.setEventHandler { [weak self] in self?.tick() }
+    timer = source
+    source.resume()
+  }
+
+  private func startRecognition() {
+    guard !finished else { return }
+    task?.cancel()
+    request?.endAudio()
+    if let engine {
+      engine.stop()
+      engine.inputNode.removeTap(onBus: 0)
+    }
+
+    let nextRequest = SFSpeechAudioBufferRecognitionRequest()
+    nextRequest.shouldReportPartialResults = true
+    nextRequest.taskHint = .dictation
+    if recognizer.supportsOnDeviceRecognition {
+      nextRequest.requiresOnDeviceRecognition = true
+    }
+
+    let nextEngine = AVAudioEngine()
+    let node = nextEngine.inputNode
+    let format = node.outputFormat(forBus: 0)
+    guard format.channelCount > 0, format.sampleRate > 0 else { fail("mic-failed") }
+    node.installTap(onBus: 0, bufferSize: 2_048, format: format) { buffer, _ in
+      nextRequest.append(buffer)
+    }
+    do {
+      nextEngine.prepare()
+      try nextEngine.start()
+    } catch {
+      fail("mic-failed")
+    }
+
+    request = nextRequest
+    engine = nextEngine
+    task = recognizer.recognitionTask(with: nextRequest) { [weak self] result, error in
+      guard let self else { return }
+      if let result {
+        let text = result.bestTranscription.formattedString
+        self.queue.async { self.receive(text) }
+        if result.isFinal {
+          self.queue.asyncAfter(deadline: .now() + .milliseconds(250)) { self.restartIfNeeded() }
+        }
+      } else if error != nil {
+        self.queue.asyncAfter(deadline: .now() + .milliseconds(500)) { self.restartIfNeeded() }
+      }
+    }
+  }
+
+  private func receive(_ transcript: String) {
+    guard !finished, transcript != lastTranscript else { return }
+    lastTranscript = transcript
+    lastChange = .now()
+
+    if let extracted = Self.command(after: phrase, in: transcript) {
+      armed = true
+      command = extracted
+    } else if armed {
+      // A recognizer restart may drop the trigger from its fresh transcript.
+      // Once armed, that fresh text is the command rather than a new trigger.
+      command = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+  }
+
+  private func tick() {
+    guard !finished else { return }
+    if let stopFile, FileManager.default.fileExists(atPath: stopFile) {
+      finish(exitCode: 0)
+      return
+    }
+    guard armed, !command.isEmpty else { return }
+    let quietFor = Double(DispatchTime.now().uptimeNanoseconds - lastChange.uptimeNanoseconds) / 1_000_000_000
+    guard quietFor >= silenceGap else { return }
+    emit(["wake": true, "phrase": phrase, "text": command])
+    finish(exitCode: 0)
+  }
+
+  private func restartIfNeeded() {
+    guard !finished else { return }
+    DispatchQueue.main.async { self.startRecognition() }
+  }
+
+  private func finish(exitCode: Int32) {
+    guard !finished else { return }
+    finished = true
+    timer?.cancel()
+    timer = nil
+    task?.cancel()
+    request?.endAudio()
+    engine?.stop()
+    engine?.inputNode.removeTap(onBus: 0)
+    exit(exitCode)
+  }
+
+  /// Returns nil when the phrase has not been heard, and the possibly-empty
+  /// suffix when it has. Folding handles accents/case without making broad
+  /// fuzzy matches that would turn ordinary room speech into agent commands.
+  static func command(after phrase: String, in transcript: String) -> String? {
+    guard let range = transcript.range(
+      of: phrase,
+      options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+    ) else { return nil }
+    return String(transcript[range.upperBound...])
+      .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+  }
+}
+
 SFSpeechRecognizer.requestAuthorization { status in
   guard status == .authorized else { fail("speech-not-authorized") }
   // Recognize in the user's language: a hardcoded en-US recognizer
@@ -139,6 +293,20 @@ SFSpeechRecognizer.requestAuthorization { status in
     let recognizer = candidates.lazy.compactMap({ SFSpeechRecognizer(locale: $0) })
       .first(where: { $0.isAvailable })
   else { fail("recognizer-unavailable") }
+
+  if let wakeWord {
+    let listener = WakeWordListener(
+      phrase: wakeWord,
+      recognizer: recognizer,
+      stopFile: stopFile,
+      silenceGapMs: endpointMs > 0 ? endpointMs : 1_200
+    )
+    listener.start()
+    // Retain for the process lifetime; callbacks alone are not an ownership
+    // contract and a released listener would silently stop hearing the room.
+    withExtendedLifetime(listener) { RunLoop.main.run() }
+    return
+  }
 
   let request = SFSpeechAudioBufferRecognitionRequest()
   request.shouldReportPartialResults = true
