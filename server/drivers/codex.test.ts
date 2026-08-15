@@ -5,7 +5,7 @@
 //
 // The fake is a shebang script — the same constraint codex.cmd itself
 // hits on Windows. resolveCliSpawn covers both, so these run everywhere.
-import { chmodSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ProviderInstance } from "../contracts.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
-import { CodexDriver } from "./codex.ts";
+import { CodexDriver, danglingCustomToolCall } from "./codex.ts";
 
 const FAKE_CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "testing", "fake-codex-app-server.ts");
 
@@ -24,6 +24,27 @@ describe("CodexDriver.decodeConfig", () => {
     expect(CodexDriver.decodeConfig({ fullAuto: true }).fullAuto).toBe(true);
     // anything non-true is off — a truthy string must not enable full auto
     expect(CodexDriver.decodeConfig({ fullAuto: "yes" }).fullAuto).toBe(false);
+  });
+});
+
+describe("Codex persisted history validation", () => {
+  it("finds a custom tool call with no matching output", () => {
+    const root = mkdtempSync(join(tmpdir(), "omb-codex-history-"));
+    const cursor = "01a0028b-b820-7031-98c3-f082e4492393";
+    const dir = join(root, "sessions", "2026", "08", "15");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `rollout-${cursor}.jsonl`);
+    writeFileSync(file, [
+      JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call", call_id: "call-orphan" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant" } }),
+    ].join("\n"));
+    expect(danglingCustomToolCall(cursor, root)).toBe("call-orphan");
+    writeFileSync(file, [
+      JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call", call_id: "call-complete" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call_output", call_id: "call-complete" } }),
+    ].join("\n"));
+    expect(danglingCustomToolCall(cursor, root)).toBeNull();
+    rmSync(root, { recursive: true, force: true });
   });
 });
 
@@ -54,6 +75,7 @@ describe("CodexDriver turns (fake app-server)", () => {
     delete process.env.FAKE_CODEX_DUMP;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENMAUSBOT_COMPOSIO_KEY;
+    delete process.env.CODEX_HOME;
     recorder?.stop();
     await instance?.dispose();
     rmSync(scratch, { recursive: true, force: true });
@@ -360,6 +382,25 @@ describe("CodexDriver turns (fake app-server)", () => {
     ]);
     const methods = JSON.parse(readFileSync(dump, "utf8")).calls.map((call: { method: string }) => call.method);
     expect(methods).toEqual(["initialize", "initialized", "thread/resume", "turn/start", "thread/start", "turn/start"]);
+    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
+  });
+
+  it("skips a locally corrupt resume cursor before app-server can exit", async () => {
+    await create({ mode: "resume" });
+    const cursor = "01a0028b-b820-7031-98c3-f082e4492393";
+    const sessionDir = join(scratch, "sessions", "2026", "08", "15");
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(
+      join(sessionDir, `rollout-${cursor}.jsonl`),
+      JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call", call_id: "call-orphan" } }) + "\n",
+    );
+    process.env.CODEX_HOME = scratch;
+    const dump = join(scratch, "local-corrupt-dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-local-corrupt", text: "continue", resumeCursor: cursor });
+    await recorder.until((event) => event.type === "turn.completed");
+    const methods = JSON.parse(readFileSync(dump, "utf8")).calls.map((call: { method: string }) => call.method);
+    expect(methods).toEqual(["initialize", "initialized", "thread/start", "turn/start"]);
     expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
   });
 

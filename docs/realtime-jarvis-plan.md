@@ -56,7 +56,10 @@ milieu d'un outil. Le driver utilise maintenant `turn/interrupt` avec le
 en fallback. Si un ancien curseur déjà corrompu renvoie exactement l'erreur
 `Custom tool call output is missing`, il démarre une fois un thread natif
 propre, republie le nouveau curseur et rejoue la demande ; les autres erreurs
-restent fermées sans retry ambigu.
+restent fermées sans retry ambigu. La variante réelle où Codex écrit seulement
+l'erreur sur stderr puis quitte avec le code 0 est également traitée : avant
+`thread/resume`, OpenMausBot vérifie le rollout JSONL local et ignore le curseur
+s'il contient un `custom_tool_call` sans `custom_tool_call_output` correspondant.
 
 Les installations locales sont enfin signées avec une identité persistante
 créée dans le trousseau (`OpenMausBot Local Development`) au lieu d'une

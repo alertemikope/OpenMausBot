@@ -139,7 +139,13 @@ exact native thread/turn and waits for terminal completion before its bounded
 hard-stop fallback. This prevents interrupted custom/MCP tool calls from
 leaving replay history without a tool result. A resumed legacy cursor with the
 exact missing-custom-tool-output provider error is recovered once onto a fresh
-Codex thread; unrelated errors are never retried silently.
+Codex thread; unrelated errors are never retried silently. Current Codex can
+also write that error only to stderr and exit successfully before replying to
+`turn/start`. Before resuming a local cursor, OpenMausBot therefore scans the
+matching bounded rollout JSONL for `custom_tool_call` records without a later
+`custom_tool_call_output`; a corrupt cursor is skipped before app-server starts
+the turn. This keeps the recovery deterministic without retrying arbitrary
+provider exits.
 
 Rooms do not expose a call button: one voice must have one turn/approval owner.
 Call a Chief of Staff bot and let its existing `ask_bot` tools coordinate the

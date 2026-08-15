@@ -10,7 +10,7 @@
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
 import { homedir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,6 +63,65 @@ const COMPUTER_PROXY_PATH = (() => {
   const ts = join(dirname(fileURLToPath(import.meta.url)), "..", "computer-proxy.ts");
   return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
 })();
+
+const MAX_SESSION_SCAN_BYTES = 64 * 1024 * 1024;
+
+function findSessionFile(root: string, cursor: string): string | null {
+  if (!existsSync(root) || cursor.length > 128 || !/^[a-zA-Z0-9_-]+$/.test(cursor)) return null;
+  const pending = [root];
+  let visited = 0;
+  while (pending.length && visited < 20_000) {
+    const dir = pending.pop()!;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      visited += 1;
+      const target = join(dir, entry.name);
+      if (entry.isDirectory()) pending.push(target);
+      else if (entry.isFile() && entry.name.endsWith(".jsonl") && entry.name.includes(cursor)) return target;
+    }
+  }
+  return null;
+}
+
+/** Codex can persist a custom tool call before its output and then be killed.
+ * Resuming such a rollout currently makes app-server log an error and exit 0
+ * without returning a JSON-RPC error. Detect that local history before resume
+ * so the logical user turn can start on a clean native thread instead. */
+export function danglingCustomToolCall(
+  cursor: string,
+  codexHome = process.env.CODEX_HOME?.trim() || join(homedir(), ".codex"),
+): string | null {
+  const file = findSessionFile(join(codexHome, "sessions"), cursor);
+  if (!file) return null;
+  try {
+    if (statSync(file).size > MAX_SESSION_SCAN_BYTES) return null;
+    const pending = new Set<string>();
+    for (const line of readFileSync(file, "utf8").split("\n")) {
+      if (!line) continue;
+      let record: any;
+      try {
+        record = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (record?.type !== "response_item") continue;
+      const payload = record.payload ?? {};
+      if (payload.type === "custom_tool_call" && typeof payload.call_id === "string") {
+        pending.add(payload.call_id);
+      } else if (payload.type === "custom_tool_call_output" && typeof payload.call_id === "string") {
+        pending.delete(payload.call_id);
+      }
+    }
+    return pending.values().next().value ?? null;
+  } catch {
+    return null;
+  }
+}
 
 type StdioMcp = { command: string; args: string[]; env: Record<string, string> };
 
@@ -490,7 +549,16 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         try {
           await request("initialize", { clientInfo: { name: "openmausbot", version: "1" } });
           send({ jsonrpc: "2.0", method: "initialized", params: {} });
-          const cursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+          const requestedCursor = typeof turn.resumeCursor === "string" ? turn.resumeCursor : null;
+          const orphanedCall = requestedCursor ? danglingCustomToolCall(requestedCursor) : null;
+          const cursor = orphanedCall ? null : requestedCursor;
+          if (orphanedCall) {
+            appendNative(threadId, {
+              dir: "in",
+              source: "codex.history-recovery",
+              msg: { skippedCursor: requestedCursor, orphanedCall },
+            });
+          }
           let startedModel: string | null = null;
           if (cursor) {
             try {
