@@ -126,6 +126,14 @@ Recording again after each rebuilt installation. A machine switching from an
 older ad-hoc build must grant those permissions one final time; subsequent
 rebuilds signed by the persistent identity retain them.
 
+CUA permission discovery during ordinary startup is non-interactive. Electron
+checks Accessibility with `isTrustedAccessibilityClient(false)` and Screen
+Recording with `getMediaAccessStatus("screen")` before loading the embedded
+host. In particular, startup must not call CUA's prompt-enabled native request
+when a grant is missing: macOS 27 otherwise reopens “Device Control and Data
+Access” after every launch. The user grants the switch once in System Settings;
+the next launch verifies it and starts the private daemon without a dialog.
+
 Codex cancellation is graceful: the driver sends `turn/interrupt` for the
 exact native thread/turn and waits for terminal completion before its bounded
 hard-stop fallback. This prevents interrupted custom/MCP tool calls from

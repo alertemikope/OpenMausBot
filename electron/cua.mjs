@@ -14,7 +14,7 @@
 // The resulting connection descriptor is written to
 // <userData>/cua-connection.json for the harness server to hand to drivers.
 
-import { app, ipcMain } from "electron";
+import { app, ipcMain, systemPreferences } from "electron";
 import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
@@ -79,20 +79,40 @@ async function loadEmbeddedSdk() {
   return import(pathToFileURL(path.join(process.resourcesPath, "cua-sdk", "cua-sdk.mjs")).href);
 }
 
+/** Read host-owned grants without presenting any macOS UI. The native CUA
+ * request primitive uses AXIsProcessTrustedWithOptions(prompt: true), so it
+ * must never be the first check during ordinary application startup. */
+export function hostMacOSPermissionStatus() {
+  if (process.platform !== "darwin") {
+    return { accessibility: false, screenRecording: false };
+  }
+  return {
+    accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+    screenRecording: systemPreferences.getMediaAccessStatus("screen") === "granted",
+  };
+}
+
 async function startEmbedded(binary) {
   // Import from the staged Resources tree in production. The app intentionally
   // excludes general node_modules, so a bare package import only works in dev.
   const sdk = await loadEmbeddedSdk();
   // CUA's embedding contract requires grants before the child daemon starts;
-  // these SDK calls execute in Electron main so macOS attributes them to
-  // OpenMausBot rather than to a terminal or helper process.
-  const permissionStatus = sdk.requestMacOSPermissions();
+  // first use Electron's non-prompting checks. Calling CUA's native request
+  // primitive while a grant is absent opens universalAccessAuthWarn on every
+  // app launch, creating an unavoidable permission-dialog loop.
+  const permissionStatus = hostMacOSPermissionStatus();
   if (!sdk.hasRequiredMacOSPermissions(permissionStatus)) {
     const missing = [
       !permissionStatus.accessibility && "Accessibility",
       !permissionStatus.screenRecording && "Screen Recording",
     ].filter(Boolean).join(" and ");
     throw new Error(`${missing || "macOS permissions"} required; grant access in System Settings and restart OpenMausBot`);
+  }
+  // Both grants are already present, so this host-attributed SDK verification
+  // is now side-effect free and preserves CUA's embedding precondition.
+  const verifiedStatus = sdk.requestMacOSPermissions();
+  if (!sdk.hasRequiredMacOSPermissions(verifiedStatus)) {
+    throw new Error("macOS permissions changed while starting the embedded CUA host");
   }
   embeddedHost = new sdk.EmbeddedCuaDriverHost(binary, HOST_BUNDLE_ID);
   const conn = await embeddedHost.start();
