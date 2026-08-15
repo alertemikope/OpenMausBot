@@ -15,7 +15,7 @@
 // <userData>/cua-connection.json for the harness server to hand to drivers.
 
 import { app, ipcMain } from "electron";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import net from "node:net";
@@ -33,6 +33,7 @@ const STANDALONE_SOCKET = path.join(
 const HOST_BUNDLE_ID = "com.openmausbot.app";
 
 let embeddedHost = null; // EmbeddedCuaDriverHost | null
+let standaloneHost = null; // ChildProcess | null — only when we started it
 const connectionStore = createCuaConnectionStore({
   getUserData: () => app.getPath("userData"),
 });
@@ -104,6 +105,52 @@ async function startEmbedded(binary) {
   };
 }
 
+function standaloneConnection() {
+  return {
+    mode: "standalone",
+    socketPath: STANDALONE_SOCKET,
+    mcpCommand: INSTALLED_DRIVER,
+    mcpArgs: ["mcp", "--socket", STANDALONE_SOCKET],
+    mcpEnv: {},
+  };
+}
+
+/** macOS can retain TCC grants for CuaDriver.app even when an ad-hoc local
+ * OpenMausBot rebuild has a new code requirement. In that case use the
+ * official signed standalone daemon rather than claiming host control is
+ * unavailable. The socket remains private to the current user. */
+async function startStandalone() {
+  if (!fs.existsSync(INSTALLED_DRIVER)) throw new Error("CuaDriver.app is not installed");
+  if (await socketAlive(STANDALONE_SOCKET)) return standaloneConnection();
+
+  fs.mkdirSync(path.dirname(STANDALONE_SOCKET), { recursive: true, mode: 0o700 });
+  try {
+    fs.rmSync(STANDALONE_SOCKET, { force: true });
+  } catch {
+    /* a live socket would already have returned above */
+  }
+  standaloneHost = spawn(
+    INSTALLED_DRIVER,
+    ["serve", "--socket", STANDALONE_SOCKET, "--permission-mode", "standard"],
+    { stdio: "ignore" },
+  );
+  standaloneHost.once("error", () => {
+    // Readiness loop below converts spawn failures into one actionable error.
+  });
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (await socketAlive(STANDALONE_SOCKET)) return standaloneConnection();
+    if (standaloneHost.exitCode !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  try {
+    standaloneHost.kill();
+  } catch {
+    /* already exited */
+  }
+  standaloneHost = null;
+  throw new Error("CuaDriver.app daemon did not become ready");
+}
+
 export async function startCua() {
   const binary = resolveDriverBinary();
   if (!binary) {
@@ -121,20 +168,18 @@ export async function startCua() {
     try {
       nextConnection = await startEmbedded(binary);
     } catch (err) {
-      nextConnection = {
-        mode: "unavailable",
-        reason: `embedded host failed: ${err?.message ?? err}`,
-      };
+      try {
+        nextConnection = await startStandalone();
+      } catch (fallbackErr) {
+        nextConnection = {
+          mode: "unavailable",
+          reason: `embedded host failed: ${err?.message ?? err}; standalone fallback failed: ${fallbackErr?.message ?? fallbackErr}`,
+        };
+      }
     }
   } else if (await socketAlive(STANDALONE_SOCKET)) {
     // Dev machine with CuaDriver.app's daemon already running.
-    nextConnection = {
-      mode: "standalone",
-      socketPath: STANDALONE_SOCKET,
-      mcpCommand: binary,
-      mcpArgs: ["mcp"],
-      mcpEnv: {},
-    };
+    nextConnection = standaloneConnection();
   } else {
     nextConnection = {
       mode: "unavailable",
@@ -169,6 +214,14 @@ export async function stopCua() {
       // daemon holds a parent-liveness pipe; host death closes it anyway
     }
     embeddedHost = null;
+  }
+  if (standaloneHost) {
+    try {
+      standaloneHost.kill();
+    } catch {
+      /* already exited */
+    }
+    standaloneHost = null;
   }
   if (connectionStore.get()) {
     connectionStore.persist({ mode: "unavailable", reason: "desktop-host-stopped" });
