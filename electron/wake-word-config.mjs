@@ -1,6 +1,6 @@
 export const DEFAULT_WAKE_WORD_CONFIG = Object.freeze({
   enabled: false,
-  phrase: "Kenpachi",
+  phrase: "Salut Kenpachi",
 });
 
 /** Keep the passive listener's persisted input narrow and predictable. */

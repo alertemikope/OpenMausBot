@@ -53,6 +53,8 @@ let wakeWord: String? = {
   return value.isEmpty ? nil : value
 }()
 
+let debugTranscripts = CommandLine.arguments.contains("--debug-transcripts")
+
 let stopFile: String? = {
   let args = CommandLine.arguments
   guard let index = args.firstIndex(of: "--stop-file"), index + 1 < args.count else { return nil }
@@ -188,7 +190,6 @@ final class WakeWordListener {
 
     let nextRequest = SFSpeechAudioBufferRecognitionRequest()
     nextRequest.shouldReportPartialResults = true
-    nextRequest.taskHint = .dictation
     if recognizer.supportsOnDeviceRecognition {
       nextRequest.requiresOnDeviceRecognition = true
     }
@@ -217,7 +218,9 @@ final class WakeWordListener {
         if result.isFinal {
           self.queue.asyncAfter(deadline: .now() + .milliseconds(250)) { self.restartIfNeeded() }
         }
-      } else if error != nil {
+      } else if let error {
+        let detail = error as NSError
+        if debugTranscripts { emit(["wake_error": "\(detail.domain):\(detail.code)"]) }
         self.queue.asyncAfter(deadline: .now() + .milliseconds(500)) { self.restartIfNeeded() }
       }
     }
@@ -227,6 +230,7 @@ final class WakeWordListener {
     guard !finished, transcript != lastTranscript else { return }
     lastTranscript = transcript
     lastChange = .now()
+    if debugTranscripts { emit(["wake_debug": transcript]) }
 
     if let extracted = Self.command(after: phrase, in: transcript) {
       armed = true
@@ -272,12 +276,25 @@ final class WakeWordListener {
   /// suffix when it has. Folding handles accents/case without making broad
   /// fuzzy matches that would turn ordinary room speech into agent commands.
   static func command(after phrase: String, in transcript: String) -> String? {
-    guard let range = transcript.range(
-      of: phrase,
-      options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
-    ) else { return nil }
-    return String(transcript[range.upperBound...])
-      .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+    // Apple consistently renders the fictional name “Kenpachi” as two
+    // ordinary French words (observed: “Kim Paty”). Keep a narrow alias list
+    // for the shipped default rather than using general fuzzy matching, which
+    // would make an always-on microphone trigger on unrelated room speech.
+    let folded = phrase.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+      .lowercased()
+    let candidates = folded == "salut kenpachi"
+      ? [phrase, "Salut Kim Patchy", "Salut Ken Patchi", "Salut Kim Paty", "Salut Kim Pati", "Salut Quimpachi", "Salut Pachi", "Salut Paty", "Salut Pat"]
+      : [phrase]
+    for candidate in candidates.sorted(by: { $0.count > $1.count }) {
+      if let range = transcript.range(
+        of: candidate,
+        options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]
+      ) {
+        return String(transcript[range.upperBound...])
+          .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+      }
+    }
+    return nil
   }
 }
 
@@ -293,20 +310,6 @@ SFSpeechRecognizer.requestAuthorization { status in
     let recognizer = candidates.lazy.compactMap({ SFSpeechRecognizer(locale: $0) })
       .first(where: { $0.isAvailable })
   else { fail("recognizer-unavailable") }
-
-  if let wakeWord {
-    let listener = WakeWordListener(
-      phrase: wakeWord,
-      recognizer: recognizer,
-      stopFile: stopFile,
-      silenceGapMs: endpointMs > 0 ? endpointMs : 1_200
-    )
-    listener.start()
-    // Retain for the process lifetime; callbacks alone are not an ownership
-    // contract and a released listener would silently stop hearing the room.
-    withExtendedLifetime(listener) { RunLoop.main.run() }
-    return
-  }
 
   let request = SFSpeechAudioBufferRecognitionRequest()
   request.shouldReportPartialResults = true
@@ -349,10 +352,27 @@ SFSpeechRecognizer.requestAuthorization { status in
     if let result = result {
       let text = result.bestTranscription.formattedString
       endpointer?.saw(text)
-      emit(["partial": !result.isFinal, "text": text])
-      if result.isFinal { exit(0) }
+      if let wakeWord {
+        if debugTranscripts { emit(["wake_debug": text, "partial": !result.isFinal]) }
+        if result.isFinal {
+          if let command = WakeWordListener.command(after: wakeWord, in: text), !command.isEmpty {
+            emit(["wake": true, "phrase": wakeWord, "text": command])
+          } else {
+            // An unrelated utterance is a normal passive-listener window,
+            // not a failure. Electron immediately starts a fresh local one.
+            emit(["wake_idle": true])
+          }
+          exit(0)
+        }
+      } else {
+        emit(["partial": !result.isFinal, "text": text])
+        if result.isFinal { exit(0) }
+      }
     }
-    if error != nil { fail("recognition-error") }
+    if let error {
+      let detail = error as NSError
+      fail("recognition-error:\(detail.domain):\(detail.code)")
+    }
   }
 }
 

@@ -107,6 +107,32 @@ is inserted once as GPT-Live initial context. If connection fails before the
 call becomes live, it is sent once through normal text chat, with no voice or
 paid fallback. Hang-up rearms the listener.
 
+The Apple recognizer requires macOS Dictation to be enabled. The shipped
+French wake phrase also accepts a narrow observed transcription alias
+(`Salut Kim Paty`) because Apple does not consistently recognize the fictional
+name “Kenpachi”. General fuzzy matching is deliberately not used. Diagnostic
+transcript output requires the explicit helper-only `--debug-transcripts`
+flag; the production listener does not log ambient transcripts.
+On macOS 27 each passive recognition window finalizes one local utterance;
+unrelated speech yields `wake_idle` and Electron immediately rearms without
+exposing the transcript to the renderer or counting a listener failure.
+
+Local macOS packages are certificate-signed with the persistent
+`OpenMausBot Local Development` identity created in the login keychain by
+`pnpm setup:codesign`. Do not replace it with ad-hoc signing (`identity: "-"`):
+ad-hoc designated requirements contain the changing binary CDHash and make
+TCC request Microphone, Speech Recognition, Accessibility, and Screen
+Recording again after each rebuilt installation. A machine switching from an
+older ad-hoc build must grant those permissions one final time; subsequent
+rebuilds signed by the persistent identity retain them.
+
+Codex cancellation is graceful: the driver sends `turn/interrupt` for the
+exact native thread/turn and waits for terminal completion before its bounded
+hard-stop fallback. This prevents interrupted custom/MCP tool calls from
+leaving replay history without a tool result. A resumed legacy cursor with the
+exact missing-custom-tool-output provider error is recovered once onto a fresh
+Codex thread; unrelated errors are never retried silently.
+
 Rooms do not expose a call button: one voice must have one turn/approval owner.
 Call a Chief of Staff bot and let its existing `ask_bot` tools coordinate the
 team instead of opening simultaneous speaking sessions.

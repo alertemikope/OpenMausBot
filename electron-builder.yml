@@ -43,9 +43,10 @@ extraResources:
     to: server
 
 mac:
-  # Local/private builds still need a complete sealed bundle (rather than
-  # Electron's linker-only signature) so deep verification and TCC are stable.
-  identity: "-"
+  # A certificate-backed local identity keeps the designated requirement
+  # stable across rebuilds. Ad-hoc signing ("-") makes TCC key permissions to
+  # the changing CDHash and therefore re-prompts after every installation.
+  identity: OpenMausBot Local Development
   target:
     - target: dmg
       arch: arm64

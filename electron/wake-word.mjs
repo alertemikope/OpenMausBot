@@ -143,6 +143,7 @@ function startListener() {
   let offset = 0;
   let buffer = "";
   let detected = false;
+  let idleWindow = false;
   const drain = () => {
     let content;
     try {
@@ -157,6 +158,13 @@ function startListener() {
     while ((newline = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, newline).trim();
       buffer = buffer.slice(newline + 1);
+      try {
+        if (JSON.parse(line)?.wake_idle === true) {
+          idleWindow = true;
+          failures = 0;
+          continue;
+        }
+      } catch {}
       const command = parseWakeWordLine(line);
       if (!command || listener !== owned) continue;
       detected = true;
@@ -187,7 +195,7 @@ function startListener() {
     cleanup();
     if (listener !== owned) return;
     listener = null;
-    if (!detected && !suspensions.size && config.enabled) failures += 1;
+    if (!detected && !idleWindow && !suspensions.size && config.enabled) failures += 1;
     publish(failures >= 3 ? { error: "The wake listener stopped repeatedly. Check microphone and speech access." } : undefined);
     scheduleRestart();
   });

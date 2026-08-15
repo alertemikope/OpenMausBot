@@ -19,7 +19,7 @@ export function VoiceSettings() {
   const [output, setOutput] = useState(() => localStorage.getItem("openmaus.realtime.output") ?? "");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [wake, setWake] = useState<WakeWordState | null>(null);
-  const [wakePhrase, setWakePhrase] = useState("Kenpachi");
+  const [wakePhrase, setWakePhrase] = useState("Salut Kenpachi");
   const [savingWake, setSavingWake] = useState(false);
 
   const refreshOauth = async () => {

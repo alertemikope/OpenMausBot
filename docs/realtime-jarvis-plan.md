@@ -34,13 +34,35 @@ Recette live du 15 août 2026 sur l'application réellement installée :
   double `response.create` ni erreur fournisseur ;
 - smoke test vocal strictement en lecture seule de Gmail, Google Drive et
   Pennylane : `CONNECTORS_OK` ;
-- fermeture de session propre et réarmement du listener Kenpachi.
+- wake acoustique réel prononcé par l'utilisateur, ouverture de l'overlay,
+  réponse Jarvis réussie, fermeture de session propre et listener réarmé.
 
-La capture acoustique du wake word ne peut pas être automatisée avec `say` :
-macOS ne reboucle pas sa sortie système vers l'entrée microphone. Le helper
-signé, sa configuration `Salut Kenpachi`, son processus d'écoute et le handoff
-logiciel sont validés ; la toute dernière recette acoustique exige simplement
-que l'utilisateur prononce la phrase devant le Mac.
+La recette acoustique a révélé deux dépendances locales désormais traitées :
+Dictée macOS était désactivée (`kLSRErrorDomain:201`) et Apple transcrit le nom
+fictionnel « Kenpachi » sous la forme « Kim Paty ». Dictée a été activée avec
+l'accord explicite de l'utilisateur et le helper garde une liste d'alias
+étroite pour la phrase livrée, sans fuzzy matching général qui augmenterait
+les faux déclenchements. Un mode diagnostic explicite peut afficher les
+transcriptions pendant la calibration ; il est désactivé dans le listener de
+production afin de ne pas journaliser les conversations ambiantes.
+Sur macOS 27, le listener passif fonctionne par fenêtres d'énoncé locales :
+une phrase sans déclencheur produit un événement interne `wake_idle`, puis
+Electron relance immédiatement une fenêtre propre sans compter un échec.
+
+Une capture de recette a aussi révélé un thread Codex repris contenant un
+appel d'outil sans résultat. La cause était l'ancien hard-kill du processus au
+milieu d'un outil. Le driver utilise maintenant `turn/interrupt` avec le
+`threadId` et le `turnId` natifs, attend le terminal borné, puis tue seulement
+en fallback. Si un ancien curseur déjà corrompu renvoie exactement l'erreur
+`Custom tool call output is missing`, il démarre une fois un thread natif
+propre, republie le nouveau curseur et rejoue la demande ; les autres erreurs
+restent fermées sans retry ambigu.
+
+Les installations locales sont enfin signées avec une identité persistante
+créée dans le trousseau (`OpenMausBot Local Development`) au lieu d'une
+signature ad hoc liée au CDHash. La transition demande une dernière validation
+des permissions macOS, puis les recompilations et relances conservent les
+autorisations TCC du bundle principal et du helper vocal.
 
 Le seul écart fournisseur est explicite : le compte OAuth courant reçoit
 `Voice session access denied` pour `gpt-live-1-codex` et

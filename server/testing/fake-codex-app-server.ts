@@ -4,7 +4,7 @@
 // initialize/thread/turn handshake, then plays a scripted turn. Like the
 // real app-server, it never exits on its own — the driver kills it.
 //
-//   FAKE_CODEX_MODE   happy (default) | approval | mcp-approval | resume | stream | steering
+//   FAKE_CODEX_MODE   happy (default) | approval | mcp-approval | resume | corrupt-resume | stream | steering | interrupt
 //   FAKE_CODEX_DUMP   path to write {argv, env, calls, decision} as JSON
 //
 // Keep this file dependency-free — it runs as a bare `node` subprocess.
@@ -68,7 +68,7 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", id: msg.id, result: { ok: true } });
         break;
       case "thread/resume":
-        if (mode === "resume") {
+        if (mode === "resume" || mode === "corrupt-resume") {
           out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: msg.params?.threadId } } });
         } else {
           out({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "no such thread" } });
@@ -78,9 +78,13 @@ process.stdin.on("data", (chunk) => {
         out({ jsonrpc: "2.0", id: msg.id, result: { thread: { id: "codex-thread-1" }, model: "fake-codex-model" } });
         break;
       case "turn/start":
-        out({ jsonrpc: "2.0", id: msg.id, result: mode === "steering" ? { turn: { id: "codex-turn-1" } } : { ok: true } });
+        if (mode === "corrupt-resume" && msg.params?.threadId !== "codex-thread-1") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "Custom tool call output is missing for call id: call_broken" } });
+          break;
+        }
+        out({ jsonrpc: "2.0", id: msg.id, result: mode === "steering" || mode === "interrupt" ? { turn: { id: "codex-turn-1" } } : { ok: true } });
         notify("item/started", { item: { id: "i1", type: "commandExecution", command: "ls -la" } });
-        if (mode === "steering") {
+        if (mode === "steering" || mode === "interrupt") {
           // Remain active until the test sends turn/steer.
         } else if (mode === "approval") {
           out({ jsonrpc: "2.0", id: 100, method: "execCommandApproval", params: { command: "rm -rf scratch" } });
@@ -115,6 +119,15 @@ process.stdin.on("data", (chunk) => {
         dump();
         notify("item/completed", { item: { id: "a-steer", type: "agentMessage", text: "steered" } });
         notify("turn/completed", { turn: { id: "codex-turn-1", status: "completed" } });
+        break;
+      case "turn/interrupt":
+        if (msg.params?.threadId !== "codex-thread-1" || msg.params?.turnId !== "codex-turn-1") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -1, message: "wrong active turn" } });
+          break;
+        }
+        out({ jsonrpc: "2.0", id: msg.id, result: {} });
+        dump();
+        notify("turn/completed", { turn: { id: "codex-turn-1", status: "interrupted" } });
         break;
       default:
         if (msg.id !== undefined) out({ jsonrpc: "2.0", id: msg.id, result: {} });

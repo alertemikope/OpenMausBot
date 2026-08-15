@@ -16,7 +16,7 @@ describe("wake word configuration", () => {
       enabled: true,
       phrase: "Hey Kenpachi",
     });
-    expect(normalizeWakeWordConfig({ enabled: true, phrase: " " }).phrase).toBe("Kenpachi");
+    expect(normalizeWakeWordConfig({ enabled: true, phrase: " " }).phrase).toBe("Salut Kenpachi");
     expect(normalizeWakeWordConfig({ phrase: "x".repeat(80) }).phrase).toHaveLength(48);
   });
 

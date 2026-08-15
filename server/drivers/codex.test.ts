@@ -121,6 +121,23 @@ describe("CodexDriver turns (fake app-server)", () => {
     });
   });
 
+  it("interrupts and awaits the exact active Codex turn before closing its app-server", async () => {
+    await create({ mode: "interrupt" });
+    const dump = join(scratch, "interrupt-dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-interrupt", text: "start tool work" });
+    await recorder.until((event) => event.type === "item.started");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await instance.adapter.interruptTurn("t-interrupt", turnId);
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.calls.find((call: { method: string }) => call.method === "turn/interrupt")?.params).toEqual({
+      threadId: "codex-thread-1",
+      turnId: "codex-turn-1",
+    });
+    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: false, stopReason: "interrupted" });
+  });
+
   it("mounts Composio without exposing its key in argv", async () => {
     await create();
     const dump = join(scratch, "dump.json");
@@ -328,6 +345,22 @@ describe("CodexDriver turns (fake app-server)", () => {
     const started = await recorder.until((e) => e.type === "session.started");
     expect(started).toMatchObject({ sessionId: "codex-thread-1" });
     await recorder.until((e) => e.type === "turn.completed");
+  });
+
+  it("recovers once with a fresh thread when resumed history has a dangling custom tool call", async () => {
+    await create({ mode: "corrupt-resume" });
+    const dump = join(scratch, "corrupt-resume-dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-corrupt", text: "read mail", resumeCursor: "broken-thread" });
+    await recorder.until((event) => event.type === "turn.completed");
+    const sessions = recorder.events.filter((event) => event.type === "session.started");
+    expect(sessions).toEqual([
+      expect.objectContaining({ sessionId: "broken-thread" }),
+      expect.objectContaining({ sessionId: "codex-thread-1" }),
+    ]);
+    const methods = JSON.parse(readFileSync(dump, "utf8")).calls.map((call: { method: string }) => call.method);
+    expect(methods).toEqual(["initialize", "initialized", "thread/resume", "turn/start", "thread/start", "turn/start"]);
+    expect(recorder.events.at(-1)).toMatchObject({ type: "turn.completed", ok: true });
   });
 
   it("surfaces an approval request and forwards the user's decision", async () => {

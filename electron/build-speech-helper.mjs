@@ -10,6 +10,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const electronDir = path.dirname(fileURLToPath(import.meta.url));
 const projectDir = path.dirname(electronDir);
 const resourcesDir = path.join(electronDir, "resources");
+const signingIdentity = process.env.OPENMAUSBOT_CODESIGN_IDENTITY?.trim()
+  || "OpenMausBot Local Development";
 
 export const speechHelperBundle = path.join(resourcesDir, "OpenMausBot Speech.app");
 export const speechHelperBinary = path.join(speechHelperBundle, "Contents", "MacOS", "speech-helper");
@@ -23,16 +25,16 @@ export function buildSpeechHelper() {
     ["-O", path.join(resourcesDir, "speech-helper.swift"), "-o", speechHelperBinary],
     { stdio: "inherit", timeout: 120_000 },
   );
-  // Give development builds a stable identity and the same audio entitlement
-  // as the release. electron-builder replaces this ad-hoc signature when it
-  // signs the containing distribution.
+  // Sign with the same certificate-backed identity as the containing app.
+  // An ad-hoc signature is tied to the binary's CDHash, so rebuilding this
+  // helper would otherwise make macOS ask for Microphone and Speech again.
   execFileSync(
     "codesign",
     [
       "--force",
       "--deep",
       "--sign",
-      "-",
+      signingIdentity,
       "--options",
       "runtime",
       "--entitlements",

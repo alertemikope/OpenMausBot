@@ -156,7 +156,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const { instanceId, config } = input;
     const listeners = new Set<RuntimeEventListener>();
     interface Turn {
-      stop: () => void;
+      stop: () => Promise<void>;
       steer: (text: string) => Promise<{ accepted: boolean; reason?: string }>;
       turnId: string;
       asks: Map<string, (behavior: string, message?: string) => void>;
@@ -191,6 +191,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       });
 
       const state = { settled: false, lastText: "", sawStreamDelta: false };
+      let resolveTerminal!: () => void;
+      const terminal = new Promise<void>((resolve) => { resolveTerminal = resolve; });
       const asks = new Map<string, (behavior: string, message?: string) => void>();
       let nextId = 1;
       const rpcPending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
@@ -240,17 +242,34 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         }
       };
 
-      const stop = () => killCliTree(child);
+      const stop = async () => {
+        if (!state.settled && codexThreadId && codexTurnId) {
+          try {
+            await request("turn/interrupt", { threadId: codexThreadId, turnId: codexTurnId }, 5_000);
+            await Promise.race([
+              terminal,
+              new Promise<void>((resolve) => {
+                const timer = setTimeout(resolve, 5_000);
+                timer.unref?.();
+              }),
+            ]);
+          } catch {
+            // A dead app-server still needs a bounded hard-stop fallback.
+          }
+        }
+        killCliTree(child);
+      };
 
       const settle = (ok: boolean, stopReason: string | null) => {
         if (state.settled) return;
         state.settled = true;
+        resolveTerminal();
         for (const finish of [...asks.values()]) finish("deny", "OpenMausBot: the turn ended");
         for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
         rpcPending.clear();
         active.delete(threadId);
         emit({ ...base(threadId, turnId), type: "turn.completed", ok, stopReason, cost: null });
-        stop(); // the app-server never exits on its own
+        void stop(); // the app-server never exits on its own
       };
 
       // server→client approval request → canonical request.opened
@@ -493,10 +512,30 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             startedModel = started?.model ?? null;
           }
           emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: startedModel ?? turn.model ?? null });
-          const startedTurn = await request("turn/start", {
-            threadId: codexThreadId,
-            input: [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }],
-          });
+          const turnInput = [{ type: "text", text: turn.system ? `${turn.system}\n\n${turn.text}` : turn.text }];
+          let startedTurn;
+          try {
+            startedTurn = await request("turn/start", { threadId: codexThreadId, input: turnInput });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            const brokenConversation = /custom tool call output is missing|dangling_tool_call|function call.*missing.*output/iu.test(message);
+            if (!cursor || !brokenConversation) throw error;
+            // An interrupted MCP/custom-tool call can leave a persisted Codex
+            // thread unreplayable. Fail closed on arbitrary errors, but for
+            // this exact provider state start a clean native thread and retry
+            // once so future turns are not permanently bricked.
+            const recovered = await request("thread/start", {
+              cwd: turn.cwd ?? homedir(),
+              model: turn.model || null,
+              sandbox: config.fullAuto ? "danger-full-access" : "workspace-write",
+              approvalPolicy: config.fullAuto ? "never" : "on-request",
+              ephemeral: false,
+            });
+            codexThreadId = recovered?.thread?.id ?? null;
+            if (!codexThreadId) throw error;
+            emit({ ...base(threadId, turnId), type: "session.started", sessionId: codexThreadId, model: recovered?.model ?? turn.model ?? null });
+            startedTurn = await request("turn/start", { threadId: codexThreadId, input: turnInput });
+          }
           codexTurnId = startedTurn?.turn?.id ?? startedTurn?.id ?? null;
         } catch (e) {
           if (!state.settled) {
@@ -539,7 +578,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           steering: true,
         },
         sendTurn,
-        interruptTurn: async (threadId) => active.get(threadId)?.stop(),
+        interruptTurn: async (threadId) => { await active.get(threadId)?.stop(); },
         steerTurn: async (threadId, _turnId, text) =>
           active.get(threadId)?.steer(text) ?? { accepted: false, reason: "No active Codex turn." },
         respondToRequest: async (threadId, requestId, decision) => {
@@ -550,7 +589,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         },
         hasSession: (threadId) => active.has(threadId),
         stopAll: async () => {
-          for (const { stop } of active.values()) stop();
+          await Promise.all([...active.values()].map(({ stop }) => stop()));
         },
         onEvent: (listener) => {
           listeners.add(listener);
@@ -558,7 +597,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         },
       },
       dispose: async () => {
-        for (const { stop } of active.values()) stop();
+        await Promise.all([...active.values()].map(({ stop }) => stop()));
         listeners.clear();
       },
     };
