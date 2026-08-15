@@ -21,6 +21,7 @@ import {
 } from "./container-computer.ts";
 import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE_DIR } from "./config.ts";
 import { resetPathCache } from "./env-path.ts";
+import { googleWorkspaceIntegration } from "./google-workspace.ts";
 import type { RuntimeEvent } from "./contracts.ts";
 
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
@@ -469,6 +470,7 @@ async function startTurn(
   }
   const instanceId = instance.instanceId;
   const model = opts?.runOn === "cloud" ? instance.models.default : bot.modelSelection.model;
+  const googleWorkspace = googleWorkspaceIntegration();
 
   // an edit hands us its already-branched user message; a plain send appends
   let userMessage = opts?.userMessage;
@@ -509,6 +511,8 @@ async function startTurn(
     `You are ${bot.name}, a personal bot in OpenMausBot.`,
     bot.title && `Role: ${bot.title}.`,
     bot.description && `About: ${bot.description}`,
+    googleWorkspace &&
+      "For Gmail, Google Drive, Calendar, Sheets, Docs, and other Google Workspace tasks, use the direct google_workspace MCP tools before Composio.",
   ]
     .filter(Boolean)
     .join(" ");
@@ -536,6 +540,7 @@ async function startTurn(
           },
         };
       }
+      if (googleWorkspace) integrations.googleWorkspace = googleWorkspace;
       const wants = opts?.runOn === "cloud" ? "cloud" : bot.computer; // cloud routine overrides the MAUS default
       const mountsComputerMcp = instance.adapter.capabilities.computerMcp === true;
       const mountsCloudComputer = mountsComputerMcp || instance.driverKind === "boxAgent";

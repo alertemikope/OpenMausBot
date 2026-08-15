@@ -169,6 +169,40 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.env.PENNYLANE_READONLY).toBe("false");
   });
 
+  it("mounts the direct local Google Workspace MCP through inherited env", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-google-workspace",
+      text: "list calendars",
+      integrations: {
+        googleWorkspace: {
+          command: process.execPath,
+          args: ["/opt/openmausbot/google-workspace-mcp.js"],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            OPENMAUSBOT_GWS_PATH: "/opt/homebrew/bin/gws",
+          },
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toEqual([
+      "-c",
+      `mcp_servers.google_workspace.command=${JSON.stringify(process.execPath)}`,
+      "-c",
+      'mcp_servers.google_workspace.args=["/opt/openmausbot/google-workspace-mcp.js"]',
+      "-c",
+      'mcp_servers.google_workspace.env_vars=["ELECTRON_RUN_AS_NODE","OPENMAUSBOT_GWS_PATH"]',
+      "app-server",
+    ]);
+    expect(seen.env.OPENMAUSBOT_GWS_PATH).toBe("/opt/homebrew/bin/gws");
+  });
+
   it("mounts explicit This Mac or Local VM Cua MCP without leaking its environment", async () => {
     await create();
     const dump = join(scratch, "dump.json");

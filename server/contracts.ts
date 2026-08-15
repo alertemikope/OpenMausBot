@@ -102,6 +102,8 @@ export interface SendTurnInput {
     composio?: { url?: string; key: string };
     /** Pennylane Company API v2 through the local stdio MCP server. */
     pennylane?: { command: string; args: string[]; env: Record<string, string> };
+    /** Gmail, Drive, Calendar, Sheets, Docs, etc. through local gws OAuth. */
+    googleWorkspace?: { command: string; args: string[]; env: Record<string, string> };
     /** Cloud computer, reached through OpenMausBot's REST-to-MCP adapter. */
     computer?: { kind?: "box"; boxId: string; token: string };
     /** Direct stdio connection to a Cua Driver MCP server (host or sandbox). */

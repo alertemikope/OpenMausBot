@@ -22,9 +22,11 @@ if (argv.includes("--version")) {
   console.log("fake-acp 1.0.0");
   process.exit(0);
 }
-if (process.env.FAKE_ACP_DUMP) {
-  writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify({ argv, env: process.env }, null, 2));
-}
+const dump: { argv: string[]; env: NodeJS.ProcessEnv; mcpServers?: unknown } = { argv, env: process.env };
+const writeDump = () => {
+  if (process.env.FAKE_ACP_DUMP) writeFileSync(process.env.FAKE_ACP_DUMP, JSON.stringify(dump, null, 2));
+};
+writeDump();
 
 const out = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + "\n");
 const result = (id: unknown, res: unknown) => out({ jsonrpc: "2.0", id, result: res });
@@ -135,6 +137,8 @@ function handle(msg: any) {
       break;
     case "session/new": {
       const servers: McpEntry[] = Array.isArray(msg.params?.mcpServers) ? msg.params.mcpServers : [];
+      dump.mcpServers = servers;
+      writeDump();
       agentsMcp = servers.find((s: any) => s?.name === "agents") ?? null;
       result(msg.id, { sessionId: "fake-acp-session" });
       break;

@@ -136,7 +136,7 @@ describe("ClaudeDriver turns (fake CLI)", () => {
     expect(seen.env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined();
   });
 
-  it("mounts the agents comms proxy as an MCP server and pre-allows its tools", async () => {
+  it("mounts local MCP integrations and pre-allows their tools", async () => {
     await create();
     const dump = join(scratch, "dump.json");
     process.env.FAKE_CLAUDE_DUMP = dump;
@@ -150,6 +150,11 @@ describe("ClaudeDriver turns (fake CLI)", () => {
           args: ["/fake/agents-proxy.js"],
           env: { OMB_HARNESS_URL: "http://127.0.0.1:1", OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok", OMB_TURN_DEPTH: "0" },
         },
+        googleWorkspace: {
+          command: process.execPath,
+          args: ["/fake/google-workspace-mcp.js"],
+          env: { OPENMAUSBOT_GWS_PATH: "/fake/gws" },
+        },
       },
     });
     await recorder.until((e) => e.type === "turn.completed");
@@ -160,8 +165,13 @@ describe("ClaudeDriver turns (fake CLI)", () => {
       args: ["/fake/agents-proxy.js"],
       env: { OMB_BOT_ID: "b1", OMB_COMMS_TOKEN: "tok" },
     });
+    expect(mcpConfig.mcpServers.google_workspace).toMatchObject({
+      args: ["/fake/google-workspace-mcp.js"],
+      env: { OPENMAUSBOT_GWS_PATH: "/fake/gws" },
+    });
     const allowed = seen.argv[seen.argv.indexOf("--allowedTools") + 1];
     expect(allowed).toContain("mcp__agents");
+    expect(allowed).toContain("mcp__google_workspace");
   });
 
   it("resumes with --resume when a cursor exists and reports that session id", async () => {

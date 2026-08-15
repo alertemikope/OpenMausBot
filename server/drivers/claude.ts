@@ -274,6 +274,10 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         mcpServers.pennylane = { ...turn.integrations.pennylane };
         allowed.push("mcp__pennylane");
       }
+      if (turn.integrations?.googleWorkspace) {
+        mcpServers.google_workspace = { ...turn.integrations.googleWorkspace };
+        allowed.push("mcp__google_workspace");
+      }
       if (turn.integrations?.computer) {
         mcpServers.computer = {
           command: process.execPath,

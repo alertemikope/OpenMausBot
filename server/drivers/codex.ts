@@ -108,6 +108,11 @@ function appServerArgs(turn: SendTurnInput, env: Record<string, string | undefin
     appendStdioMcp(args, env, "pennylane", pennylane);
   }
 
+  const googleWorkspace = turn.integrations?.googleWorkspace;
+  if (googleWorkspace) {
+    appendStdioMcp(args, env, "google_workspace", googleWorkspace);
+  }
+
   // Both explicit computer destinations use the same MCP name. A cloud box
   // rides OpenMausBot's REST bridge; This Mac and Local VM hand Codex Cua
   // Driver's official stdio MCP contract directly.

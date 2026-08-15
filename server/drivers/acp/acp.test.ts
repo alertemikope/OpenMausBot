@@ -117,6 +117,36 @@ describe("ACP turns (fake CLI)", () => {
     expect(seen.env.XAI_API_KEY).toBeUndefined();
   });
 
+  it("mounts the direct Google Workspace stdio MCP contract", async () => {
+    await create();
+    const dump = join(scratch, "google-mcp.json");
+    process.env.FAKE_ACP_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-google-mcp",
+      text: "list Drive files",
+      integrations: {
+        googleWorkspace: {
+          command: process.execPath,
+          args: ["/fake/google-workspace-mcp.js"],
+          env: { OPENMAUSBOT_GWS_PATH: "/fake/gws", ELECTRON_RUN_AS_NODE: "1" },
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpServers).toContainEqual({
+      name: "google_workspace",
+      command: process.execPath,
+      args: ["/fake/google-workspace-mcp.js"],
+      env: [
+        { name: "OPENMAUSBOT_GWS_PATH", value: "/fake/gws" },
+        { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+      ],
+    });
+  });
+
   it("surfaces a permission ask as request.opened and completes once allowed", async () => {
     await create(GrokAgentDriver, "permission");
     await instance.adapter.sendTurn({ threadId: "t-perm", text: "go" });

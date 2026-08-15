@@ -161,6 +161,15 @@ export function createAcpDriver(support: AcpSupport): ProviderDriver<AcpConfig> 
             env: acpEnv(pennylane.env),
           });
         }
+        const googleWorkspace = turn.integrations?.googleWorkspace;
+        if (googleWorkspace) {
+          servers.push({
+            name: "google_workspace",
+            command: googleWorkspace.command,
+            args: googleWorkspace.args,
+            env: acpEnv(googleWorkspace.env),
+          });
+        }
         // The bot's computer, mounted exactly like the Claude driver does.
         // Cloud boxes use the REST adapter; host and sandbox Cua connections
         // expose Cua Driver's official MCP server directly.
