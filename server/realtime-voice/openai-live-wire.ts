@@ -30,6 +30,7 @@ export type LiveInboundEvent =
   | { kind: "transcript"; role: "user" | "assistant"; text: string; done: boolean }
   | { kind: "delegation"; id: string; prompt: string; targetId?: string; mode?: "task" | "status" | "cancel" | "steer" | "followup" }
   | ({ kind: "routine"; id: string } & VoiceRoutineRequest)
+  | { kind: "response-started" }
   | { kind: "response-finished" }
   | { kind: "error"; message: string; fatalAuth: boolean }
   | { kind: "unknown"; eventType: string };
@@ -330,6 +331,7 @@ export function parseLiveEvent(payload: string): LiveInboundEvent | null {
     const text = boundedText(event.transcript);
     return text === undefined ? { kind: "ignored", eventType: type } : { kind: "transcript", role: "assistant", text, done: true };
   }
+  if (type === "response.created") return { kind: "response-started" };
   if (type === "response.done") return { kind: "response-finished" };
   if (type === "error") {
     const error = record(event.error);

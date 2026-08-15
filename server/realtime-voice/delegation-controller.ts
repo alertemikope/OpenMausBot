@@ -63,6 +63,15 @@ export class LiveDelegationController {
       return;
     }
     if (event.kind === "session-started") return this.options.onSessionStarted?.(event.expiresAt);
+    // GA Realtime emits response.created for every response, including the
+    // model's acknowledgement that contains agent_consult. Track those
+    // provider-owned responses too: a fast delegated agent can finish while
+    // that acknowledgement is still being spoken, and response.create is
+    // rejected if sent over it. Keep the result queued until response.done.
+    if (event.kind === "response-started") {
+      this.gaResponseInFlight = true;
+      return;
+    }
     if (event.kind === "response-finished") {
       this.gaResponseInFlight = false;
       this.drainGaOutbox();

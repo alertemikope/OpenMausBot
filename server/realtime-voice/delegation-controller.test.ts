@@ -137,6 +137,47 @@ describe("GPT-Live delegation controller", () => {
     ]);
   });
 
+  it("waits for the current GA speech to finish before announcing a fast agent result", async () => {
+    const socket = new FakeSocket();
+    let finish!: (result: { text: string }) => void;
+    const run = vi.fn(() => new Promise<{ text: string }>((resolve) => { finish = resolve; }));
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-1",
+      targetId: "codex",
+      targets: [{ id: "codex", name: "Codex" }],
+      socket,
+      transport: "ga-realtime",
+      runtime: { run },
+      control: vi.fn(),
+      respondToRequest: vi.fn(),
+      onFatal: vi.fn(),
+    });
+
+    // The provider is still speaking its acknowledgement when Codex finishes.
+    controller.handle(JSON.stringify({ type: "response.created", response: { id: "ack-1", status: "in_progress" } }));
+    controller.handle(JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "agent_consult",
+      call_id: "call-fast",
+      arguments: JSON.stringify({ mode: "task", target_id: "codex", prompt: "Réponds oui" }),
+    }));
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    finish({ text: "oui" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Never issue response.create over an active response: Realtime rejects it
+    // while still accepting the function output, which strands the result
+    // until the human asks again.
+    expect(socket.sent).toHaveLength(0);
+
+    controller.handle(JSON.stringify({ type: "response.done", response: { id: "ack-1", status: "completed" } }));
+    await vi.waitFor(() => expect(socket.sent).toHaveLength(2));
+    expect(socket.sent.map((payload) => JSON.parse(payload))).toEqual([
+      { type: "conversation.item.create", item: { type: "function_call_output", call_id: "call-fast", output: "Codex: oui" } },
+      { type: "response.create" },
+    ]);
+  });
+
   it("creates an explicit autonomous routine through the dedicated GA tool", async () => {
     const socket = new FakeSocket();
     const manageRoutine = vi.fn(async () => ({ ok: true, message: "Scheduled Morning brief with Codex at 08:30." }));

@@ -136,6 +136,7 @@ describe("GPT-Live wire", () => {
         content: [{ type: "input_text", text: '[OPENMAUS_ROUTINE] {"action":"pause","routine_name":"Morning brief"}' }],
       },
     }))).toEqual({ kind: "routine", id: "routine-live", action: "pause", name: "Morning brief" });
+    expect(parseLiveEvent(JSON.stringify({ type: "response.created", response: { id: "resp-1", status: "in_progress" } }))).toEqual({ kind: "response-started" });
     expect(parseLiveEvent(JSON.stringify({ type: "response.done", response: { status: "completed" } }))).toEqual({ kind: "response-finished" });
     expect(parseLiveEvent(JSON.stringify({ type: "response.output_audio_transcript.done", transcript: "Terminé" }))).toEqual({
       kind: "transcript",
