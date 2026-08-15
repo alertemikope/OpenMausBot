@@ -37,10 +37,12 @@ export function updateCall(action: RealtimeCallAction): void {
   notify();
 }
 
-export function startCall(targetId: string, options?: { initialText?: string }) {
-  if (currentCall() === targetId) return;
-  // Switching calls must silence both halves before ownership changes; the
-  // old overlay may not unmount until React's next render.
+export function startCall(targetId: string, options?: { initialText?: string }): boolean {
+  // One window owns one physical microphone and one Realtime session. Never
+  // replace that owner implicitly: doing so used to unmount the old ChatView
+  // controller before its server session had closed, then create a second
+  // session and fail with HTTP 409.
+  if (currentCall() !== null) return false;
   void window.ogb?.speechStop();
   void window.ogb?.wakeSetCallActive?.(true);
   const nextGeneration = ++generation;
@@ -51,6 +53,7 @@ export function startCall(targetId: string, options?: { initialText?: string }) 
   };
   state = reduceRealtimeCall(state, { type: "authorize", targetId, generation: nextGeneration });
   notify();
+  return true;
 }
 
 /** End the current call. A targetId makes cleanup ownership-safe: an async

@@ -151,6 +151,16 @@ Rooms do not expose a call button: one voice must have one turn/approval owner.
 Call a Chief of Staff bot and let its existing `ask_bot` tools coordinate the
 team instead of opening simultaneous speaking sessions.
 
+The Realtime media controller is mounted once at the application shell, not in
+the selected chat. Switching bots or rooms therefore preserves the call and
+cannot create a second server session. Its compact, minimizable dock leaves the
+sidebar, transcript, and composer interactive. While the call is live, explicit
+completed utterances such as “Ouvre Codex”, “Affiche Luna Max”, or “Va sur
+Milind” select that visible conversation locally; ordinary task language is
+never interpreted as UI navigation. Cross-bot delegation and concurrent task
+ownership remain a separate router milestone rather than being implied by UI
+navigation.
+
 ## Message playback
 
 The optional **Read aloud** button is separate from Jarvis. It uses the free

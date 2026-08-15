@@ -66,6 +66,7 @@ export function buildLiveSession(params: {
       "Commentary context is silent. Speakable context is delivered naturally and briefly.",
       "Never claim an action succeeded before the delegated agent reports completion.",
       "Speaking over you only interrupts speech; it never cancels delegated work.",
+      "Simple requests to open, show, or switch to a bot conversation are handled locally by the app. Briefly acknowledge them and do not delegate them as agent work.",
       language ? `Use ${language} as the primary spoken language.` : "",
       params.instructions?.trim().slice(0, 2_000) ?? "",
     ]

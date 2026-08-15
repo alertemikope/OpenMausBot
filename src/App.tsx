@@ -14,12 +14,19 @@ import { UpdateBanner } from "@/components/UpdateBanner";
 import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
-import { startCall } from "@/lib/call";
+import { CallOverlay } from "@/components/CallView";
+import { endCall, startCall, useOnCall } from "@/lib/call";
 
 function Shell() {
   const { state, dispatch } = useStore();
   const group = state.groups.find((g) => g.id === state.selectedId);
   const bot = group ? undefined : (state.bots.find((b) => b.id === state.selectedId) ?? state.bots[0]);
+  const callTargetId = useOnCall();
+  const callBot = callTargetId ? state.bots.find((candidate) => candidate.id === callTargetId) : undefined;
+
+  useEffect(() => {
+    if (callTargetId && state.connected && !callBot) endCall(callTargetId);
+  }, [callBot, callTargetId, state.connected]);
 
   // Nothing on this machine can run a bot. Wait for the first /api/instances
   // response before deciding — an empty list means "not asked yet", and
@@ -115,6 +122,9 @@ function Shell() {
       {state.computerOpen && bot && <ComputerPanel bot={bot} />}
       {state.appSettingsOpen && <SettingsModal />}
       {state.pluginsOpen && <PluginsPanel />}
+      {/* The voice owner is window-global, not owned by the selected chat.
+          Navigation therefore cannot unmount its WebRTC controller. */}
+      <CallOverlay bot={callBot} />
       </div>
     </div>
   );

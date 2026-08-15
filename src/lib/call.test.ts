@@ -8,13 +8,13 @@ describe("call ownership", () => {
     endCall();
   });
 
-  it("does not let stale cleanup hang up a newer call", () => {
-    startCall("bot-a");
-    startCall("bot-b");
+  it("keeps one window-wide owner and refuses an overlapping call", () => {
+    expect(startCall("bot-a")).toBe(true);
+    expect(startCall("bot-b")).toBe(false);
 
-    expect(endCall("bot-a")).toBe(false);
-    expect(currentCall()).toBe("bot-b");
-    expect(endCall("bot-b")).toBe(true);
+    expect(endCall("bot-b")).toBe(false);
+    expect(currentCall()).toBe("bot-a");
+    expect(endCall("bot-a")).toBe(true);
     expect(currentCall()).toBeNull();
   });
 

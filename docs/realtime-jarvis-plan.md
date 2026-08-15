@@ -17,12 +17,22 @@ d'OpenMausBot un assistant de type Jarvis sans remplacer son harness d'agents.
 
 | Milestone | Statut | Preuve principale |
 | --- | --- | --- |
-| 1 — Conversation temps réel | terminé | appel installé connecté, audio bidirectionnel, sous-titres et barge-in |
-| 2 — AgentConsult | terminé | délégation réelle à Luna Max et résultat reparlé par la couche vocale |
-| 3 — Contrôle continu | terminé côté code et tests | status, steer, follow-up et cancel liés à la session vocale et au tour actif |
+| 1 — Conversation temps réel | terminé pour le transport | appel installé connecté, audio bidirectionnel, sous-titres et barge-in |
+| 2 — AgentConsult | terminé pour un bot ; multi-bot restant | délégation réelle à Luna Max et résultat reparlé par la couche vocale |
+| 3 — Contrôle continu | terminé pour une tâche active | status, steer, follow-up et cancel liés à la session vocale et au tour actif |
 | 4 — Approbations | terminé côté code et tests | confirmation exacte, expiration et propriété `threadId`/`requestId` |
-| 5 — Kenpachi/UX | terminé côté code | handoff unique, réarmement, overlay, AT-SPI et application macOS installée |
+| 5 — Kenpachi/UX | partiel | wake et réarmement livrés ; panneau global/navigation vocale livrés, orchestration vocale multi-bot restante |
 | 6 — Retrait legacy | terminé | aucune clé ElevenLabs requise ; TTS ponctuel local macOS seulement |
+
+L'état ne doit plus être résumé comme « Jarvis terminé ». Le transport et le
+chemin sûr vers un agent fonctionnent, mais le routeur vocal reste attaché à un
+seul `targetId` serveur. La première correction UX rend désormais le contrôleur
+WebRTC global à la fenêtre : changer de conversation ne le démonte plus, le chat
+reste utilisable sous un panneau compact, un second appel concurrent est refusé
+avant l'API, et les commandes explicites « Ouvre/Affiche/Va sur <bot> » changent
+la conversation visible localement. Le prochain lot requis pour un vrai Jarvis
+est le catalogue vocal de cibles, la délégation explicite à un autre bot et le
+suivi parallèle de plusieurs tâches avec propriété séparée des approbations.
 
 Recette live du 15 août 2026 sur l'application réellement installée :
 

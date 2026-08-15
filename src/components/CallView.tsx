@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Captions, Loader2, Mic, MicOff, Phone, PhoneOff, VolumeX, X } from "lucide-react";
+import { Captions, ChevronDown, ChevronUp, Loader2, Mic, MicOff, Phone, PhoneOff, VolumeX, X } from "lucide-react";
 
 import { track } from "@/lib/analytics";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/lib/call";
 import { cn } from "@/lib/cn";
 import { RealtimeCallController } from "@/lib/realtime-call/controller";
+import { voiceNavigationTarget } from "@/lib/voice-navigation";
 import { useStore, visibleMessages, type Bot } from "@/state/store";
 import { MausAvatar } from "./Avatar";
 import { pendingApprovals } from "./PendingApproval";
@@ -53,7 +54,9 @@ export function CallTargetButton({
   onStart: () => void;
 }) {
   const { dispatch } = useStore();
-  const active = useOnCall() === targetId;
+  const activeTarget = useOnCall();
+  const active = activeTarget === targetId;
+  const busyElsewhere = activeTarget !== null && !active;
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [helpOpen, setHelpOpen] = useState(false);
   const helpId = useId();
@@ -74,9 +77,11 @@ export function CallTargetButton({
     };
   }, []);
 
-  const unavailable = !active && authenticated !== true;
+  const unavailable = !active && !busyElsewhere && authenticated !== true;
   const label = active
     ? `Hang up on ${targetName}`
+    : busyElsewhere
+      ? "Show the bot owning the active Jarvis call"
     : authenticated === null
       ? "Checking ChatGPT voice availability"
       : authenticated
@@ -89,9 +94,9 @@ export function CallTargetButton({
         type="button"
         onClick={() => {
           if (active) return endCall(targetId);
+          if (busyElsewhere && activeTarget) return dispatch({ type: "select", id: activeTarget });
           if (unavailable) return setHelpOpen((open) => !open);
-          onStart();
-          startCall(targetId);
+          if (startCall(targetId)) onStart();
         }}
         aria-label={label}
         aria-expanded={unavailable ? helpOpen : undefined}
@@ -99,7 +104,13 @@ export function CallTargetButton({
         title={label}
         className={cn(
           "relative flex size-9 items-center justify-center rounded-full transition-colors",
-          active ? "bg-danger text-white" : unavailable ? "text-ink-secondary/50 hover:bg-raised" : "text-ink-secondary hover:bg-raised hover:text-ink",
+          active
+            ? "bg-danger text-white"
+            : busyElsewhere
+              ? "text-accent hover:bg-raised"
+              : unavailable
+                ? "text-ink-secondary/50 hover:bg-raised"
+                : "text-ink-secondary hover:bg-raised hover:text-ink",
         )}
       >
         {active ? <PhoneOff size={17} /> : <Phone size={17} />}
@@ -127,20 +138,23 @@ export function CallTargetButton({
   );
 }
 
-export function CallOverlay({ bot }: { bot: Bot }) {
-  const active = useOnCall() === bot.id;
-  return active ? <RealtimeCall bot={bot} /> : null;
+export function CallOverlay({ bot }: { bot?: Bot }) {
+  const active = useOnCall();
+  return bot && active === bot.id ? <RealtimeCall bot={bot} /> : null;
 }
 
 function RealtimeCall({ bot }: { bot: Bot }) {
-  const { dispatch } = useStore();
+  const { state: storeState, dispatch } = useStore();
   const state = useCallState();
   const request = currentCallRequest();
   const audioRef = useRef<HTMLAudioElement>(null);
   const controllerRef = useRef<RealtimeCallController | null>(null);
   const alive = useRef(true);
   const fallbackSent = useRef(false);
+  const botsRef = useRef(storeState.bots);
+  botsRef.current = storeState.bots;
   const [muted, setMuted] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const [captions, setCaptions] = useState(true);
   const [userCaption, setUserCaption] = useState("");
   const [assistantCaption, setAssistantCaption] = useState("");
@@ -165,9 +179,13 @@ function RealtimeCall({ bot }: { bot: Bot }) {
         initialText: request.initialText,
         deviceId: microphonePreference(),
         onState: updateCall,
-        onCaption: (role, text) => {
+        onCaption: (role, text, done) => {
           if (role === "user") setUserCaption(text);
           else setAssistantCaption(text);
+          if (role === "user" && done) {
+            const targetId = voiceNavigationTarget(text, botsRef.current);
+            if (targetId) dispatch({ type: "select", id: targetId });
+          }
         },
         onInitialFallback: (text) => {
           if (fallbackSent.current) return;
@@ -191,10 +209,9 @@ function RealtimeCall({ bot }: { bot: Bot }) {
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        endCall(bot.id);
-      } else if (event.code === "Space" && state.type === "live" && state.phase === "speaking") {
+      // Chat, search and composer remain fully usable during a global call.
+      // The Space shortcut only applies when no interactive element owns it.
+      if (event.code === "Space" && event.target === document.body && state.type === "live" && state.phase === "speaking") {
         event.preventDefault();
         controllerRef.current?.interruptVoice();
       }
@@ -231,32 +248,40 @@ function RealtimeCall({ bot }: { bot: Bot }) {
   const caption = phase === "hearing" ? userCaption : assistantCaption;
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-5 bg-app/95 px-8 backdrop-blur-sm" role="dialog" aria-label={`Jarvis call with ${bot.name}`}>
+    <section
+      className="fixed bottom-5 right-5 z-40 w-[min(420px,calc(100vw-2rem))] rounded-2xl border border-hairline bg-panel/95 p-4 shadow-2xl backdrop-blur-xl"
+      aria-label={`Jarvis call with ${bot.name}`}
+    >
       <audio ref={audioRef} autoPlay aria-hidden="true" />
-      <button type="button" onClick={() => endCall(bot.id)} aria-label="Hang up" className="absolute right-5 top-5 rounded-md p-2 text-ink-secondary hover:bg-raised">
-        <X size={18} />
-      </button>
-
-      <MausAvatar color={bot.color} state={phase === "listening" || phase === "hearing" ? "listening" : phase === "speaking" ? "sending" : "working"} size={220} animated trackPointer />
-      <div className="text-center">
-        <div className="text-[20px] font-medium text-ink">{bot.name}</div>
-        <div className="mt-1 flex items-center justify-center gap-2 text-[13.5px] text-ink-secondary" aria-live="polite">
+      <div className="flex items-center gap-3">
+        <MausAvatar color={bot.color} state={phase === "listening" || phase === "hearing" ? "listening" : phase === "speaking" ? "sending" : "working"} size={54} animated />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[15px] font-medium text-ink">Jarvis · {bot.name}</div>
+          <div className="mt-0.5 flex items-center gap-2 text-[12px] text-ink-secondary" aria-live="polite">
           {["authorizing", "connecting", "working", "reconnecting"].includes(phase) && <Loader2 size={13} className="animate-spin" />}
           {status[phase] ?? "Jarvis"}
-        </div>
-        <div className={cn("mt-1 text-[11px]", state.type === "live" && !muted ? "text-success" : "text-ink-secondary")}>
-          {state.type === "live" && !muted ? "Microphone transmitting to ChatGPT Realtime" : muted ? "Microphone transmission paused" : "Microphone not transmitting"}
-        </div>
-        {(state.type === "live" || state.type === "reconnecting") && state.model && (
-          <div className="mt-1 text-[10.5px] text-ink-secondary/75" aria-label="Realtime transport">
-            {state.transport === "gpt-live" ? "GPT-Live" : "ChatGPT subscription fallback"}
-            {` · ${state.model}`}
-            {typeof state.latencyMs === "number" ? ` · ${state.latencyMs} ms` : ""}
+            <span aria-hidden="true">·</span>
+            <span className={state.type === "live" && !muted ? "text-success" : ""}>{muted ? "Mic off" : state.type === "live" ? "Mic on" : "Mic idle"}</span>
           </div>
-        )}
+        </div>
+        <button type="button" onClick={() => setMinimized((value) => !value)} aria-label={minimized ? "Expand Jarvis controls" : "Minimize Jarvis controls"} className="rounded-lg p-2 text-ink-secondary hover:bg-raised">
+          {minimized ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+        <button type="button" onClick={() => endCall(bot.id)} aria-label="Hang up" className="rounded-lg p-2 text-danger hover:bg-danger/10">
+          <X size={17} />
+        </button>
       </div>
 
-      <div className="min-h-[4rem] max-w-[620px] text-center text-[15px] leading-relaxed text-ink" aria-live="polite">
+      {!minimized && <>
+      {(state.type === "live" || state.type === "reconnecting") && state.model && (
+        <div className="mt-2 text-[10.5px] text-ink-secondary/70" aria-label="Realtime transport">
+          {state.transport === "gpt-live" ? "GPT-Live" : "ChatGPT subscription fallback"}
+          {` · ${state.model}`}
+          {typeof state.latencyMs === "number" ? ` · ${state.latencyMs} ms` : ""}
+        </div>
+      )}
+
+      <div className="mt-3 max-h-28 min-h-12 overflow-y-auto rounded-xl bg-app/55 px-3 py-2 text-[13px] leading-relaxed text-ink" aria-live="polite">
         {state.type === "failed" ? (
           <span className="text-danger">{state.message}</span>
         ) : captions && caption ? (
@@ -267,7 +292,7 @@ function RealtimeCall({ bot }: { bot: Bot }) {
       </div>
 
       {(currentTool || approval) && (
-        <div className="flex items-center gap-3 rounded-full bg-raised px-3 py-1.5 text-[12px] text-ink-secondary" aria-label="Current agent activity">
+        <div className="mt-3 flex items-center gap-3 rounded-xl bg-raised px-3 py-1.5 text-[11.5px] text-ink-secondary" aria-label="Current agent activity">
           <span>{approval ? `Approval: ${approval.detail}` : `Current tool: ${currentTool}`}</span>
           {approval && (
             <button
@@ -288,21 +313,22 @@ function RealtimeCall({ bot }: { bot: Bot }) {
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-center gap-3">
-        <button type="button" onClick={toggleMute} aria-label={muted ? "Unmute microphone" : "Mute microphone"} className="flex items-center gap-2 rounded-full border border-hairline/50 px-4 py-2 text-[13px] text-ink hover:bg-raised">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={toggleMute} aria-label={muted ? "Unmute microphone" : "Mute microphone"} className="flex items-center gap-1.5 rounded-full border border-hairline/50 px-3 py-1.5 text-[12px] text-ink hover:bg-raised">
           {muted ? <MicOff size={15} /> : <Mic size={15} />} {muted ? "Unmute" : "Mute"}
         </button>
-        <button type="button" onClick={() => controllerRef.current?.interruptVoice()} aria-label="Interrupt Jarvis voice only" className="flex items-center gap-2 rounded-full border border-hairline/50 px-4 py-2 text-[13px] text-ink hover:bg-raised">
+        <button type="button" onClick={() => controllerRef.current?.interruptVoice()} aria-label="Interrupt Jarvis voice only" className="flex items-center gap-1.5 rounded-full border border-hairline/50 px-3 py-1.5 text-[12px] text-ink hover:bg-raised">
           <VolumeX size={15} /> Stop voice
         </button>
-        <button type="button" onClick={() => setCaptions((value) => !value)} aria-label={captions ? "Hide captions" : "Show captions"} aria-pressed={captions} className="flex items-center gap-2 rounded-full border border-hairline/50 px-4 py-2 text-[13px] text-ink hover:bg-raised">
+        <button type="button" onClick={() => setCaptions((value) => !value)} aria-label={captions ? "Hide captions" : "Show captions"} aria-pressed={captions} className="flex items-center gap-1.5 rounded-full border border-hairline/50 px-3 py-1.5 text-[12px] text-ink hover:bg-raised">
           <Captions size={15} /> Captions
         </button>
-        <button type="button" onClick={() => endCall(bot.id)} aria-label="Hang up call" className="flex items-center gap-2 rounded-full bg-danger px-5 py-2.5 text-[14px] font-medium text-white">
+        <button type="button" onClick={() => endCall(bot.id)} aria-label="Hang up call" className="ml-auto flex items-center gap-1.5 rounded-full bg-danger px-3 py-1.5 text-[12px] font-medium text-white">
           <PhoneOff size={16} /> Hang up
         </button>
       </div>
-      <div className="text-[11.5px] text-ink-secondary/70">Space stops Jarvis speaking · Esc hangs up · “Annule la tâche” cancels agent work</div>
-    </div>
+      <div className="mt-2 text-[10.5px] text-ink-secondary/60">The chat and sidebar stay available · “Annule la tâche” cancels agent work</div>
+      </>}
+    </section>
   );
 }

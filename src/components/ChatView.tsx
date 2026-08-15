@@ -37,7 +37,7 @@ import { ModelPicker } from "./ModelPicker";
 import { TaskPicker } from "./TaskPicker";
 import { ReactionBar, ReactionChips } from "./Reactions";
 import { SpeakButton } from "./SpeakButton";
-import { CallButton, CallOverlay } from "./CallView";
+import { CallButton } from "./CallView";
 import { cn } from "@/lib/cn";
 
 /** Long user messages collapse behind a fade so pasted walls of text don't
@@ -653,8 +653,6 @@ export function ChatView({ bot }: { bot: Bot }) {
 
   return (
     <main className="relative flex h-full min-w-0 flex-1 flex-col bg-app">
-      {/* Call mode covers the thread while the bot is on the line */}
-      <CallOverlay bot={bot} />
       {/* Header */}
       <div
         className={cn("flex items-center justify-between px-5 py-3", isWin && "pr-[148px]")}
