@@ -31,6 +31,8 @@ import { ProviderRegistry } from "./harness/registry.ts";
 import { mentionedBots, roomResponders, Store, type GroupDefaultResponder, type Message } from "./store.ts";
 import { narrateTool } from "./speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
+import { ProactiveEngine } from "./proactive/engine.ts";
+import { signalFromWork } from "./proactive/signals.ts";
 import { RoutineManager, type RoutineRunOn } from "./routines.ts";
 import { manageVoiceRoutine } from "./realtime-voice/routine-manager.ts";
 import { HarnessAgentConsultRuntime } from "./realtime-voice/agent-consult.ts";
@@ -160,7 +162,29 @@ function broadcast(payload: unknown) {
   }
 }
 
-const work = new WorkRegistry({ emit: broadcast });
+let proactiveVoiceAvailable = () => false;
+let deliverProactiveVoice = (_text: string) => false;
+const proactive = new ProactiveEngine({
+  voiceAvailable: () => proactiveVoiceAvailable(),
+  emit: (payload) => {
+    broadcast(payload);
+    const frame = payload as { kind?: string; notification?: import("./proactive/contracts.ts").ProactiveNotification; deliver?: boolean };
+    const notification = frame.kind === "proactive.notification" ? frame.notification : undefined;
+    if (frame.deliver === true && notification?.channels.includes("voice")) {
+      deliverProactiveVoice(`${notification.signal.title}. ${notification.signal.body}`);
+    }
+  },
+});
+const work = new WorkRegistry({
+  emit: (payload) => {
+    broadcast(payload);
+    const frame = payload as { kind?: string; item?: import("./work/contracts.ts").WorkItem };
+    if (frame.kind !== "work.item" || !frame.item) return;
+    const botName = store.bot(frame.item.targetBotId)?.name ?? "Agent";
+    const signal = signalFromWork(frame.item, botName);
+    if (signal) proactive.ingest(signal);
+  },
+});
 
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
@@ -782,6 +806,8 @@ const realtimeBroker = new RealtimeSessionBroker({
     });
   },
 });
+proactiveVoiceAvailable = () => realtimeBroker.hasLiveSession();
+deliverProactiveVoice = (text) => realtimeBroker.announce(text);
 
 // ── routines: persisted definitions → detached bot tasks ───────────────
 // The scheduler owns timing and receipts; the existing harness remains the
@@ -1371,6 +1397,38 @@ const server = createServer(async (req, res) => {
         throw error;
       }
       return json(res, 202, { item: work.get(item.id) });
+    }
+
+    // ── controlled proactive notifications / deterministic policy ──────
+    if (path === "/api/proactive" && method === "GET") {
+      return json(res, 200, {
+        notifications: proactive.list(),
+        receipts: proactive.listReceipts(),
+        policy: proactive.policy(),
+      });
+    }
+    if (path === "/api/proactive/policy" && method === "PATCH") {
+      const body = await readBody(req);
+      return json(res, 200, { policy: proactive.updatePolicy(body && typeof body === "object" ? body : {}) });
+    }
+    const proactiveMatch = path.match(/^\/api\/proactive\/([\w-]+)\/(seen|dismiss|snooze|mute)$/);
+    if (proactiveMatch && method === "POST") {
+      const [id, action] = proactiveMatch.slice(1) as [string, "seen" | "dismiss" | "snooze" | "mute"];
+      let snoozeUntil: number | undefined;
+      if (action === "snooze") {
+        snoozeUntil = Number((await readBody(req)).until);
+        if (!Number.isFinite(snoozeUntil) || snoozeUntil <= Date.now()) {
+          return json(res, 400, { error: "choose a future snooze time" });
+        }
+      }
+      const item = action === "seen"
+        ? proactive.markSeen(id)
+        : action === "dismiss"
+          ? proactive.dismiss(id)
+          : action === "mute"
+            ? proactive.muteRule(id)
+            : proactive.snooze(id, snoozeUntil!);
+      return item ? json(res, 200, { notification: item }) : json(res, 404, { error: "no such proactive notification" });
     }
 
     // ── routines calendar ────────────────────────────────────────────────

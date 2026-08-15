@@ -3,13 +3,14 @@
 // is the stuff shared by every bot: who you are, your keys, and the
 // machine your bots can borrow.
 import { useEffect, useRef, useState } from "react";
-import { KeyRound, Monitor, User, Volume2, X } from "lucide-react";
+import { BellRing, KeyRound, Monitor, User, Volume2, X } from "lucide-react";
 import { useStore, type AppSettingsSection } from "@/state/store";
 import { ApiKeyRow } from "./ApiKeys";
 import { useUpdaterState } from "@/lib/updater";
 import { LocalComputerSection } from "./LocalComputerSection";
 import { Card } from "./SettingsPrimitives";
 import { VoiceSettings } from "./VoiceSettings";
+import { ProactiveSettings } from "./ProactiveSettings";
 import { cn } from "@/lib/cn";
 
 const SECTIONS: Array<{ id: AppSettingsSection; label: string; icon: typeof User }> = [
@@ -17,6 +18,7 @@ const SECTIONS: Array<{ id: AppSettingsSection; label: string; icon: typeof User
   { id: "connections", label: "Connections", icon: KeyRound },
   { id: "computer", label: "Local VM", icon: Monitor },
   { id: "voice", label: "Voice", icon: Volume2 },
+  { id: "proactivity", label: "Proactivity", icon: BellRing },
 ];
 
 /** Name + email, persisted to /api/config {profile} on blur. */
@@ -215,6 +217,8 @@ export function SettingsModal() {
             )}
 
             {section === "voice" && <VoiceSettings />}
+
+            {section === "proactivity" && <ProactiveSettings />}
 
             {section === "computer" && <LocalComputerSection />}
           </div>

@@ -93,6 +93,13 @@ export class RealtimeSessionBroker {
             .map((session) => this.describe(session.sessionId))
             .filter((session) => Boolean(session));
     }
+    hasLiveSession() {
+        return [...this.sessions.values()].some((session) => session.state === "live" && Boolean(session.delegations));
+    }
+    announce(text) {
+        const session = [...this.sessions.values()].find((candidate) => candidate.state === "live" && candidate.delegations);
+        return session?.delegations?.announce(text) ?? false;
+    }
     async acceptOffer(offerToken, offerSdp) {
         this.prune();
         const sessionId = this.offerSessions.get(offerToken);

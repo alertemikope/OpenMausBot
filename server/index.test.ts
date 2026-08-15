@@ -62,6 +62,34 @@ beforeAll(async () => {
       }],
     }),
   );
+  writeFileSync(
+    join(home, ".openmausbot", "proactive.json"),
+    JSON.stringify({
+      version: 1,
+      policy: { channels: ["dock", "system"], sources: { work: true, routine: true } },
+      notifications: [{
+        id: "signal-before-restart",
+        dedupeKey: "routine:routine-1:routine.failed:failed",
+        signal: {
+          source: "routine",
+          kind: "routine.failed",
+          entityId: "routine-1",
+          version: "failed",
+          title: "Morning brief failed",
+          body: "Provider unavailable",
+          severity: "critical",
+          occurredAt: 2,
+        },
+        status: "unread",
+        channels: ["dock"],
+        why: "Delivered silently to Mission Control. Source: routine; rule: routine.failed.",
+        createdAt: 2,
+        updatedAt: 2,
+        deduplicatedCount: 0,
+      }],
+      receipts: [],
+    }),
+  );
   mkdirSync(join(home, ".openmausbot", "voice-calls"), { recursive: true });
   writeFileSync(
     join(home, ".openmausbot", "voice-calls", "voice-memory-fixture.json"),
@@ -240,6 +268,37 @@ describe("harness HTTP API", () => {
     }]);
     if (process.platform !== "win32") {
       expect(statSync(join(home, ".openmausbot", "work-items.json")).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("exposes and persists controlled proactive notification actions", async () => {
+    const initial = await api("GET", "/api/proactive");
+    expect(initial.status).toBe(200);
+    expect(initial.body.notifications[0]).toMatchObject({
+      id: "signal-before-restart",
+      status: "unread",
+      signal: { source: "routine", kind: "routine.failed" },
+    });
+    expect(initial.body.policy.requireConfirmationForActions).toBe(true);
+
+    const until = Date.now() + 60_000;
+    const snoozed = await api("POST", "/api/proactive/signal-before-restart/snooze", { until });
+    expect(snoozed.status).toBe(200);
+    expect(snoozed.body.notification).toMatchObject({ status: "snoozed", snoozedUntil: until });
+    expect((await api("POST", "/api/proactive/signal-before-restart/snooze", { until: 1 })).status).toBe(400);
+
+    const dismissed = await api("POST", "/api/proactive/signal-before-restart/dismiss");
+    expect(dismissed.status).toBe(200);
+    expect(dismissed.body.notification.status).toBe("dismissed");
+
+    const policy = await api("PATCH", "/api/proactive/policy", { sources: { routine: false } });
+    expect(policy.status).toBe(200);
+    expect(policy.body.policy.sources.routine).toBe(false);
+    const muted = await api("POST", "/api/proactive/signal-before-restart/mute");
+    expect(muted.status).toBe(200);
+    expect((await api("GET", "/api/proactive")).body.policy.mutedRules).toContain("routine:routine.failed");
+    if (process.platform !== "win32") {
+      expect(statSync(join(home, ".openmausbot", "proactive.json")).mode & 0o777).toBe(0o600);
     }
   });
 

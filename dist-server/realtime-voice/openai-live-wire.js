@@ -299,6 +299,8 @@ export function parseLiveEvent(payload) {
         const text = boundedText(event.transcript);
         return text === undefined ? { kind: "ignored", eventType: type } : { kind: "transcript", role: "assistant", text, done: true };
     }
+    if (type === "response.created")
+        return { kind: "response-started" };
     if (type === "response.done")
         return { kind: "response-finished" };
     if (type === "error") {

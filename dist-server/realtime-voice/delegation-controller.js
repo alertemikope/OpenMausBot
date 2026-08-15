@@ -40,6 +40,15 @@ export class LiveDelegationController {
         }
         if (event.kind === "session-started")
             return this.options.onSessionStarted?.(event.expiresAt);
+        // GA Realtime emits response.created for every response, including the
+        // model's acknowledgement that contains agent_consult. Track those
+        // provider-owned responses too: a fast delegated agent can finish while
+        // that acknowledgement is still being spoken, and response.create is
+        // rejected if sent over it. Keep the result queued until response.done.
+        if (event.kind === "response-started") {
+            this.gaResponseInFlight = true;
+            return;
+        }
         if (event.kind === "response-finished") {
             this.gaResponseInFlight = false;
             this.drainGaOutbox();
@@ -77,6 +86,21 @@ export class LiveDelegationController {
         this.confirmations.clear();
         this.pendingApproval = undefined;
         this.gaOutbox.length = 0;
+    }
+    /** Deliver a policy-approved notification through the already-live voice
+     * session. It is informational context only: the voice model must not turn
+     * the signal into a tool call or autonomous action. */
+    announce(text) {
+        const message = text.trim();
+        if (!message || this.stopped || this.options.socket.readyState !== 1)
+            return false;
+        if (this.options.transport === "ga-realtime") {
+            this.enqueueGa({ instructions: `Briefly notify the user of this exact informational result. Do not call tools and do not take action: ${message}` });
+        }
+        else {
+            this.send(`proactive-${Date.now()}`, message, "speakable", true);
+        }
+        return true;
     }
     target(delegation) {
         if (delegation.targetId) {

@@ -26,7 +26,19 @@ Baseline : `449bc10`
 - synchronisation à deux phases et fencing après crash pour éviter les doublons ;
 - suppression transcript explicitement distincte de l'oubli mémoire.
 
-Le prochain lot actif est **V2.3 — moteur de proactivité contrôlée**.
+**V2.3 — moteur de proactivité contrôlée : socle tâche/routine livré.**
+
+- moteur déterministe durable : quiet hours, quota, déduplication, snooze,
+  dismiss, règle exacte « ne plus prévenir » et reçu explicable ;
+- signaux réels du registre pour tâche/routine terminée, bloquée ou échouée ;
+- Mission Control « Signals » et réglages globaux/source/canal ;
+- dock toujours conservé comme fallback silencieux ;
+- voix uniquement si un appel est réellement actif, sérialisée derrière la
+  parole en cours et interdite d'outil/action ;
+- Gmail, Calendar, Pennylane et CI restent désactivés tant que leurs pollers
+  bornés ne sont pas livrés.
+
+Le prochain sous-lot actif est **V2.3 connecteurs de signaux externes**.
 
 ## 1. État réel
 
@@ -502,10 +514,12 @@ Node 24 avant une modernisation du lockfile ou du compilateur.
 
 ### V2.3 — « Je te préviens au bon moment »
 
-- Lot D ;
-- signaux tâche/routine/calendar/email ;
-- quiet hours, dédup, snooze ;
-- Mission Control complet.
+- [~] Lot D : moteur et politique livrés, pollers externes restants ;
+- [x] signaux tâche/routine ;
+- [ ] signaux calendar/email/Pennylane/CI ;
+- [x] quiet hours, quota, dédup, snooze, dismiss et mute-rule persistants ;
+- [x] Mission Control « Signals » et réglages de sources/canaux ;
+- [ ] Mission Control complet (Next, Voice et contrôles avancés du lot E).
 
 ### V2.4 — « Je coordonne une mission »
 

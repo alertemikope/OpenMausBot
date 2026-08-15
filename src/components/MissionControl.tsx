@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import {
   Activity,
+  BellRing,
+  BellOff,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -10,6 +12,7 @@ import {
   MessageCircleQuestion,
   OctagonX,
   ShieldQuestion,
+  TimerReset,
   X,
 } from "lucide-react";
 
@@ -58,11 +61,16 @@ export function MissionControl() {
       return activeDelta || right.updatedAt - left.updatedAt;
     })
     .slice(0, 20), [state.workItems]);
-  if (!items.length) return null;
+  const signals = useMemo(() => state.proactiveNotifications
+    .filter((item) => item.status !== "dismissed")
+    .sort((left, right) => right.updatedAt - left.updatedAt)
+    .slice(0, 12), [state.proactiveNotifications]);
+  if (!items.length && !signals.length) return null;
 
   const active = items.filter((item) => ACTIVE_WORK_STATES.has(item.state));
   const needsYou = items.filter((item) => item.state === "waiting_approval" || item.state === "waiting_input");
   const unseen = items.filter((item) => !ACTIVE_WORK_STATES.has(item.state) && !item.seenAt);
+  const unreadSignals = signals.filter((item) => item.status === "unread");
 
   const openOwner = (item: WorkItem) => {
     const bot = state.bots.find((candidate) => candidate.id === item.targetBotId);
@@ -84,7 +92,7 @@ export function MissionControl() {
           <div className="flex items-center gap-2 border-b border-hairline/50 px-4 py-3">
             <Activity size={16} className="text-accent" />
             <h2 className="text-[13px] font-semibold text-ink">Mission Control</h2>
-            <span className="text-[11px] text-ink-secondary">{active.length} active · {needsYou.length} need you</span>
+            <span className="text-[11px] text-ink-secondary">{active.length} active · {needsYou.length} need you · {unreadSignals.length} signals</span>
             <button type="button" onClick={() => setExpanded(false)} aria-label="Close Mission Control" className="ml-auto rounded-lg p-1.5 text-ink-secondary hover:bg-raised">
               <X size={15} />
             </button>
@@ -123,6 +131,64 @@ export function MissionControl() {
                 </div>
               );
             })}
+            {signals.length > 0 && (
+              <div className="mt-2 border-t border-hairline/50 pt-2">
+                <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-secondary">Signals</div>
+                {signals.map((notification) => {
+                  const bot = notification.signal.targetBotId
+                    ? state.bots.find((candidate) => candidate.id === notification.signal.targetBotId)
+                    : undefined;
+                  return (
+                    <div key={notification.id} className="flex items-start gap-2.5 rounded-xl px-2.5 py-2 hover:bg-raised/70">
+                      <BellRing size={14} className={cn(
+                        "mt-0.5 shrink-0",
+                        notification.signal.severity === "critical" ? "text-danger" : notification.signal.severity === "warning" ? "text-warning" : "text-accent",
+                      )} />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (bot) dispatch({ type: "select", id: bot.id });
+                          if (notification.status === "unread") dispatch({ type: "markProactiveSeen", notificationId: notification.id });
+                        }}
+                        className="min-w-0 flex-1 text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-[12.5px] font-medium text-ink">{notification.signal.title}</span>
+                          <span className="shrink-0 text-[10px] uppercase tracking-wide text-ink-secondary/60">{notification.signal.source}</span>
+                        </div>
+                        <div className="mt-0.5 line-clamp-2 text-[11.5px] text-ink-secondary">{notification.signal.body}</div>
+                        <div className="mt-0.5 truncate text-[10.5px] text-ink-secondary/70">{notification.why}</div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dispatch({ type: "snoozeProactive", notificationId: notification.id, until: Date.now() + 60 * 60_000 })}
+                        aria-label={`Snooze ${notification.signal.title} for one hour`}
+                        className="mt-0.5 shrink-0 rounded-lg p-1.5 text-ink-secondary hover:bg-raised"
+                      >
+                        <TimerReset size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dispatch({ type: "muteProactive", notificationId: notification.id })}
+                        aria-label={`Never notify for ${notification.signal.kind}`}
+                        title="Mute this exact signal rule"
+                        className="mt-0.5 shrink-0 rounded-lg p-1.5 text-ink-secondary hover:bg-raised"
+                      >
+                        <BellOff size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => dispatch({ type: "dismissProactive", notificationId: notification.id })}
+                        aria-label={`Dismiss ${notification.signal.title}`}
+                        className="mt-0.5 shrink-0 rounded-lg p-1.5 text-ink-secondary hover:bg-raised"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -132,13 +198,13 @@ export function MissionControl() {
         aria-expanded={expanded}
         className={cn(
           "flex h-11 max-w-full items-center gap-2 rounded-full border border-hairline bg-panel/95 px-3.5 text-[12px] shadow-xl backdrop-blur-xl hover:bg-raised",
-          needsYou.length > 0 && "border-warning/50",
+          (needsYou.length > 0 || unreadSignals.some((item) => item.signal.severity !== "info")) && "border-warning/50",
         )}
       >
         {active.length ? <Loader2 size={14} className="shrink-0 animate-spin text-accent" /> : <Activity size={14} className="shrink-0 text-success" />}
         <span className="font-medium text-ink">Mission Control</span>
         <span className="truncate text-ink-secondary">
-          {needsYou.length ? `${needsYou.length} need you` : active.length ? `${active.length} working` : `${unseen.length} new result${unseen.length === 1 ? "" : "s"}`}
+          {needsYou.length ? `${needsYou.length} need you` : active.length ? `${active.length} working` : unreadSignals.length ? `${unreadSignals.length} new signal${unreadSignals.length === 1 ? "" : "s"}` : `${unseen.length} new result${unseen.length === 1 ? "" : "s"}`}
         </span>
         {expanded ? <ChevronDown size={14} className="shrink-0 text-ink-secondary" /> : <ChevronUp size={14} className="shrink-0 text-ink-secondary" />}
       </button>

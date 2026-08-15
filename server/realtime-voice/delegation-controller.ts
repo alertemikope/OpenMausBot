@@ -108,6 +108,20 @@ export class LiveDelegationController {
     this.gaOutbox.length = 0;
   }
 
+  /** Deliver a policy-approved notification through the already-live voice
+   * session. It is informational context only: the voice model must not turn
+   * the signal into a tool call or autonomous action. */
+  announce(text: string): boolean {
+    const message = text.trim();
+    if (!message || this.stopped || this.options.socket.readyState !== 1) return false;
+    if (this.options.transport === "ga-realtime") {
+      this.enqueueGa({ instructions: `Briefly notify the user of this exact informational result. Do not call tools and do not take action: ${message}` });
+    } else {
+      this.send(`proactive-${Date.now()}`, message, "speakable", true);
+    }
+    return true;
+  }
+
   private target(delegation: Delegation): string | undefined {
     if (delegation.targetId) {
       return this.targets.some((target) => target.id === delegation.targetId) ? delegation.targetId : undefined;

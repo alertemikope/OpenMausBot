@@ -178,6 +178,32 @@ describe("GPT-Live delegation controller", () => {
     ]);
   });
 
+  it("serializes a proactive voice notice behind current speech without creating work", async () => {
+    const socket = new FakeSocket();
+    const run = vi.fn();
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-1",
+      targetId: "codex",
+      socket,
+      transport: "ga-realtime",
+      runtime: { run },
+      control: vi.fn(),
+      respondToRequest: vi.fn(),
+      onFatal: vi.fn(),
+    });
+    controller.handle(JSON.stringify({ type: "response.created" }));
+
+    expect(controller.announce("Codex completed the report.")).toBe(true);
+    expect(socket.sent).toHaveLength(0);
+    expect(run).not.toHaveBeenCalled();
+
+    controller.handle(JSON.stringify({ type: "response.done" }));
+    expect(socket.sent.map((payload) => JSON.parse(payload))).toEqual([{
+      type: "response.create",
+      response: { instructions: expect.stringContaining("Do not call tools") },
+    }]);
+  });
+
   it("creates an explicit autonomous routine through the dedicated GA tool", async () => {
     const socket = new FakeSocket();
     const manageRoutine = vi.fn(async () => ({ ok: true, message: "Scheduled Morning brief with Codex at 08:30." }));

@@ -45,6 +45,13 @@ La continuité de voix ajoute maintenant un journal local borné des segments
 finalisés, sans audio brut, et injecte seulement une carte compacte des appels
 récents dans la session suivante.
 
+La livraison vocale GA suit désormais aussi les réponses déjà initiées par le
+fournisseur (`response.created` → `response.done`). Si un agent termine pendant
+que Jarvis prononce encore son accusé de réception, le résultat reste en file et
+obtient sa propre prise de parole dès que la voix est libre ; aucun
+`response.create` concurrent ne peut laisser un résultat visible mais non
+annoncé.
+
 L'autonomie planifiée est aussi reliée au dialogue : « planifie chaque jour… »,
 « mets en pause la routine… », « liste mes routines » ou « lance maintenant… »
 passent par un contrat structuré dédié et le `RoutineManager` durable existant.

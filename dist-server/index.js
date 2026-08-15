@@ -21,6 +21,8 @@ import { ProviderRegistry } from "./harness/registry.js";
 import { mentionedBots, roomResponders, Store } from "./store.js";
 import { narrateTool } from "./speech-text.js";
 import { readCuaConnection } from "./local-computer.js";
+import { ProactiveEngine } from "./proactive/engine.js";
+import { signalFromWork } from "./proactive/signals.js";
 import { RoutineManager } from "./routines.js";
 import { manageVoiceRoutine } from "./realtime-voice/routine-manager.js";
 import { HarnessAgentConsultRuntime } from "./realtime-voice/agent-consult.js";
@@ -142,7 +144,31 @@ function broadcast(payload) {
         }
     }
 }
-const work = new WorkRegistry({ emit: broadcast });
+let proactiveVoiceAvailable = () => false;
+let deliverProactiveVoice = (_text) => false;
+const proactive = new ProactiveEngine({
+    voiceAvailable: () => proactiveVoiceAvailable(),
+    emit: (payload) => {
+        broadcast(payload);
+        const frame = payload;
+        const notification = frame.kind === "proactive.notification" ? frame.notification : undefined;
+        if (frame.deliver === true && notification?.channels.includes("voice")) {
+            deliverProactiveVoice(`${notification.signal.title}. ${notification.signal.body}`);
+        }
+    },
+});
+const work = new WorkRegistry({
+    emit: (payload) => {
+        broadcast(payload);
+        const frame = payload;
+        if (frame.kind !== "work.item" || !frame.item)
+            return;
+        const botName = store.bot(frame.item.targetBotId)?.name ?? "Agent";
+        const signal = signalFromWork(frame.item, botName);
+        if (signal)
+            proactive.ingest(signal);
+    },
+});
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
@@ -736,6 +762,8 @@ const realtimeBroker = new RealtimeSessionBroker({
         });
     },
 });
+proactiveVoiceAvailable = () => realtimeBroker.hasLiveSession();
+deliverProactiveVoice = (text) => realtimeBroker.announce(text);
 // ── routines: persisted definitions → detached bot tasks ───────────────
 // The scheduler owns timing and receipts; the existing harness remains the
 // only owner of provider sessions, approvals, tools, computers and messages.
@@ -1327,6 +1355,37 @@ const server = createServer(async (req, res) => {
                 throw error;
             }
             return json(res, 202, { item: work.get(item.id) });
+        }
+        // ── controlled proactive notifications / deterministic policy ──────
+        if (path === "/api/proactive" && method === "GET") {
+            return json(res, 200, {
+                notifications: proactive.list(),
+                receipts: proactive.listReceipts(),
+                policy: proactive.policy(),
+            });
+        }
+        if (path === "/api/proactive/policy" && method === "PATCH") {
+            const body = await readBody(req);
+            return json(res, 200, { policy: proactive.updatePolicy(body && typeof body === "object" ? body : {}) });
+        }
+        const proactiveMatch = path.match(/^\/api\/proactive\/([\w-]+)\/(seen|dismiss|snooze|mute)$/);
+        if (proactiveMatch && method === "POST") {
+            const [id, action] = proactiveMatch.slice(1);
+            let snoozeUntil;
+            if (action === "snooze") {
+                snoozeUntil = Number((await readBody(req)).until);
+                if (!Number.isFinite(snoozeUntil) || snoozeUntil <= Date.now()) {
+                    return json(res, 400, { error: "choose a future snooze time" });
+                }
+            }
+            const item = action === "seen"
+                ? proactive.markSeen(id)
+                : action === "dismiss"
+                    ? proactive.dismiss(id)
+                    : action === "mute"
+                        ? proactive.muteRule(id)
+                        : proactive.snooze(id, snoozeUntil);
+            return item ? json(res, 200, { notification: item }) : json(res, 404, { error: "no such proactive notification" });
         }
         // ── routines calendar ────────────────────────────────────────────────
         if (path === "/api/routines" && method === "GET") {

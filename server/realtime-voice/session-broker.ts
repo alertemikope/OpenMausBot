@@ -143,6 +143,15 @@ export class RealtimeSessionBroker {
       .filter((session): session is LiveSessionPublic => Boolean(session));
   }
 
+  hasLiveSession(): boolean {
+    return [...this.sessions.values()].some((session) => session.state === "live" && Boolean(session.delegations));
+  }
+
+  announce(text: string): boolean {
+    const session = [...this.sessions.values()].find((candidate) => candidate.state === "live" && candidate.delegations);
+    return session?.delegations?.announce(text) ?? false;
+  }
+
   async acceptOffer(offerToken: string, offerSdp: string): Promise<{ answerSdp: string; transport: "gpt-live" | "ga-realtime"; model: string }> {
     this.prune();
     const sessionId = this.offerSessions.get(offerToken);

@@ -15,6 +15,7 @@ import {
 } from "react";
 import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
+import type { ProactiveNotification, ProactivePolicy } from "@/lib/proactive";
 import type { WorkItem } from "@/lib/work";
 import type { VoiceCallHistory } from "@/lib/call-memory";
 import { currentCall } from "@/lib/call";
@@ -193,7 +194,7 @@ export interface InstanceInfo {
   install?: EngineInstall;
 }
 
-export type AppSettingsSection = "general" | "connections" | "voice" | "computer";
+export type AppSettingsSection = "general" | "connections" | "voice" | "proactivity" | "computer";
 
 interface AppState {
   bots: Bot[];
@@ -206,6 +207,8 @@ interface AppState {
   routines: Routine[];
   routineRuns: RoutineRun[];
   workItems: WorkItem[];
+  proactiveNotifications: ProactiveNotification[];
+  proactivePolicy: ProactivePolicy | null;
   recentCallReview?: VoiceCallHistory;
   settingsOpen: boolean;
   pluginsOpen: boolean;
@@ -234,6 +237,13 @@ type Action =
   | { type: "routineRunPatched"; run: RoutineRun }
   | { type: "workItemsHydrated"; items: WorkItem[] }
   | { type: "workItemPatched"; item: WorkItem }
+  | { type: "proactiveHydrated"; notifications: ProactiveNotification[]; policy: ProactivePolicy }
+  | { type: "proactivePatched"; notification: ProactiveNotification }
+  | { type: "markProactiveSeen"; notificationId: string }
+  | { type: "dismissProactive"; notificationId: string }
+  | { type: "muteProactive"; notificationId: string }
+  | { type: "snoozeProactive"; notificationId: string; until: number }
+  | { type: "updateProactivePolicy"; patch: Partial<ProactivePolicy> }
   | { type: "cancelWork"; workItemId: string }
   | { type: "markWorkSeen"; workItemId: string }
   | { type: "voiceCallPatched"; call: VoiceCallHistory }
@@ -394,6 +404,15 @@ function reducer(state: AppState, action: Action): AppState {
         ? state.workItems.map((item) => item.id === action.item.id ? action.item : item)
         : [action.item, ...state.workItems];
       return { ...state, workItems: items.sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 500) };
+    }
+    case "proactiveHydrated":
+      return { ...state, proactiveNotifications: action.notifications, proactivePolicy: action.policy };
+    case "proactivePatched": {
+      const exists = state.proactiveNotifications.some((item) => item.id === action.notification.id);
+      const notifications = exists
+        ? state.proactiveNotifications.map((item) => item.id === action.notification.id ? action.notification : item)
+        : [action.notification, ...state.proactiveNotifications];
+      return { ...state, proactiveNotifications: notifications.sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 500) };
     }
     case "voiceCallPatched":
       return { ...state, recentCallReview: action.call };
@@ -692,6 +711,11 @@ function reducer(state: AppState, action: Action): AppState {
     case "markRoutineRunSeen":
     case "cancelWork":
     case "markWorkSeen":
+    case "markProactiveSeen":
+    case "dismissProactive":
+    case "muteProactive":
+    case "snoozeProactive":
+    case "updateProactivePolicy":
       return state;
   }
 }
@@ -709,6 +733,8 @@ const initialState: AppState = {
   routines: [],
   routineRuns: [],
   workItems: [],
+  proactiveNotifications: [],
+  proactivePolicy: null,
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
@@ -848,6 +874,27 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "markWorkSeen":
           api(`/api/work/${action.workItemId}/seen`, { method: "POST" }).catch(showError);
+          break;
+        case "markProactiveSeen":
+          api(`/api/proactive/${action.notificationId}/seen`, { method: "POST" }).catch(showError);
+          break;
+        case "dismissProactive":
+          api(`/api/proactive/${action.notificationId}/dismiss`, { method: "POST" }).catch(showError);
+          break;
+        case "muteProactive":
+          api(`/api/proactive/${action.notificationId}/mute`, { method: "POST" }).catch(showError);
+          break;
+        case "snoozeProactive":
+          api(`/api/proactive/${action.notificationId}/snooze`, {
+            method: "POST",
+            body: JSON.stringify({ until: action.until }),
+          }).catch(showError);
+          break;
+        case "updateProactivePolicy":
+          api("/api/proactive/policy", {
+            method: "PATCH",
+            body: JSON.stringify(action.patch),
+          }).catch(showError);
           break;
         case "send":
           api(`/api/bots/${action.botId}/messages`, {
@@ -1084,6 +1131,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       api("/api/work")
         .then(({ items }) => alive && rawDispatch({ type: "workItemsHydrated", items }))
         .catch(() => {});
+      api("/api/proactive")
+        .then(({ notifications, policy }) => alive && rawDispatch({ type: "proactiveHydrated", notifications, policy }))
+        .catch(() => {});
       api("/api/realtime/history?limit=1")
         .then(({ calls }) => {
           const call = calls?.[0] as VoiceCallHistory | undefined;
@@ -1180,6 +1230,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "work.item":
           rawDispatch({ type: "workItemPatched", item: frame.item });
+          break;
+        case "proactive.notification": {
+          rawDispatch({ type: "proactivePatched", notification: frame.notification });
+          if (frame.deliver === true && frame.notification?.channels?.includes("system") && typeof Notification !== "undefined" && Notification.permission === "granted") {
+            const notice = new Notification(frame.notification.signal.title, { body: frame.notification.signal.body });
+            notice.onclick = () => window.focus();
+          }
+          break;
+        }
+        case "proactive.policy":
+          rawDispatch({
+            type: "proactiveHydrated",
+            notifications: stateRef.current.proactiveNotifications,
+            policy: frame.policy,
+          });
           break;
         case "voice.call":
           rawDispatch({ type: "voiceCallPatched", call: frame.call });
