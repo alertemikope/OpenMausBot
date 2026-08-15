@@ -24,9 +24,10 @@ d'OpenMausBot un assistant de type Jarvis sans remplacer son harness d'agents.
 | 5 — Kenpachi/UX | partiel | wake, dock global, navigation et orchestration multi-bot livrés ; journal/mémoire vocale en cours |
 | 6 — Retrait legacy | terminé | aucune clé ElevenLabs requise ; TTS ponctuel local macOS seulement |
 
-L'état ne doit plus être résumé comme « Jarvis terminé ». Le transport et le
-chemin sûr vers un agent fonctionnent, mais le routeur vocal reste attaché à un
-seul `targetId` serveur. La première correction UX rend désormais le contrôleur
+L'état ne doit plus être résumé comme « Jarvis terminé ». Le transport, le
+chemin sûr vers les agents nommés et l'orchestration multi-bot fonctionnent ;
+les écarts restants portent maintenant sur le registre global du travail, la
+mémoire structurée et la proactivité. La première correction UX rend le contrôleur
 WebRTC global à la fenêtre : changer de conversation ne le démonte plus, le chat
 reste utilisable sous un panneau compact, un second appel concurrent est refusé
 avant l'API, et les commandes explicites « Ouvre/Affiche/Va sur <bot> » changent
