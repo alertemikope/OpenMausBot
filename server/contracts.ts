@@ -131,6 +131,10 @@ export interface ProviderAdapter {
      * told it has a computer whose tools its driver cannot mount — it
      * burns turns hunting for tools that aren't there. */
     computerMcp?: boolean;
+    /** False when host-computer access must be selected explicitly. This is
+     * safer for engines such as Codex: capability does not imply consent to
+     * attach the user's Mac to every new bot automatically. */
+    implicitHostComputer?: boolean;
   };
   sendTurn(input: SendTurnInput): Promise<TurnStartResult>;
   interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void>;

@@ -607,7 +607,13 @@ async function startTurn(
 
       // Auto-only host fallback. Electron owns cua-driver/TCC attribution;
       // the harness only reads its already-running connection descriptor.
-      if (!integrations.computer && !integrations.localComputer && wants === undefined && mountsComputerMcp) {
+      if (
+        !integrations.computer &&
+        !integrations.localComputer &&
+        wants === undefined &&
+        mountsComputerMcp &&
+        instance.adapter.capabilities.implicitHostComputer !== false
+      ) {
         const cua = readCuaConnection();
         if (cua) {
           integrations.localComputer = cua;

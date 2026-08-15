@@ -10,7 +10,11 @@
 // resumeCursor is the codex thread id; a later turn tries thread/resume
 // and falls back to a fresh thread/start.
 import { homedir } from "node:os";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
+import { computerProxyEnv } from "../container-computer.ts";
 import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 
 import type {
@@ -55,6 +59,31 @@ const QUESTION_TIMEOUT_NOTE = "No answer was given — use your best judgment.";
 const DENY_TIMEOUT_NOTE =
   "OpenMausBot: nobody answered this permission request in time. Skip this action and finish what you can without it.";
 const COMPOSIO_KEY_ENV = "OPENMAUSBOT_COMPOSIO_KEY";
+const COMPUTER_PROXY_PATH = (() => {
+  const ts = join(dirname(fileURLToPath(import.meta.url)), "..", "computer-proxy.ts");
+  return existsSync(ts) ? ts : ts.replace(/\.ts$/, ".js");
+})();
+
+type StdioMcp = { command: string; args: string[]; env: Record<string, string> };
+
+/** Add one stdio MCP server to Codex without putting credentials in argv.
+ * env_vars tells Codex which inherited variables to forward to that server. */
+function appendStdioMcp(
+  args: string[],
+  env: Record<string, string | undefined>,
+  name: string,
+  server: StdioMcp,
+) {
+  Object.assign(env, server.env);
+  args.push(
+    "-c",
+    `mcp_servers.${name}.command=${JSON.stringify(server.command)}`,
+    "-c",
+    `mcp_servers.${name}.args=${JSON.stringify(server.args)}`,
+    "-c",
+    `mcp_servers.${name}.env_vars=${JSON.stringify(Object.keys(server.env))}`,
+  );
+}
 
 /** Codex app-server inherits the user's normal MCP config, but OpenMausBot's
  * Composio credential is app-owned and intentionally absent from that file.
@@ -76,15 +105,20 @@ function appServerArgs(turn: SendTurnInput, env: Record<string, string | undefin
 
   const pennylane = turn.integrations?.pennylane;
   if (pennylane) {
-    Object.assign(env, pennylane.env);
-    args.push(
-      "-c",
-      `mcp_servers.pennylane.command=${JSON.stringify(pennylane.command)}`,
-      "-c",
-      `mcp_servers.pennylane.args=${JSON.stringify(pennylane.args)}`,
-      "-c",
-      `mcp_servers.pennylane.env_vars=${JSON.stringify(Object.keys(pennylane.env))}`,
-    );
+    appendStdioMcp(args, env, "pennylane", pennylane);
+  }
+
+  // Both explicit computer destinations use the same MCP name. A cloud box
+  // rides OpenMausBot's REST bridge; This Mac and Local VM hand Codex Cua
+  // Driver's official stdio MCP contract directly.
+  if (turn.integrations?.computer) {
+    appendStdioMcp(args, env, "computer", {
+      command: process.execPath,
+      args: [COMPUTER_PROXY_PATH],
+      env: { ELECTRON_RUN_AS_NODE: "1", ...computerProxyEnv(turn.integrations.computer) },
+    });
+  } else if (turn.integrations?.localComputer) {
+    appendStdioMcp(args, env, "computer", turn.integrations.localComputer);
   }
 
   args.push("app-server");
@@ -466,7 +500,14 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       snapshot,
       adapter: {
         provider: DRIVER_KIND,
-        capabilities: { sessionModelSwitch: "unsupported" },
+        capabilities: {
+          sessionModelSwitch: "unsupported",
+          computerMcp: true,
+          // Access to the host Mac is powerful. Expose both explicit choices
+          // in the UI, but never attach This Mac merely because a bot omitted
+          // its destination setting.
+          implicitHostComputer: false,
+        },
         sendTurn,
         interruptTurn: async (threadId) => active.get(threadId)?.stop(),
         respondToRequest: async (threadId, requestId, decision) => {

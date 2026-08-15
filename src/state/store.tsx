@@ -191,7 +191,7 @@ export interface InstanceInfo {
     version?: string | null;
   };
   models: { default: string; options: Array<{ id: string; label: string }> };
-  capabilities?: { computerMcp?: boolean; agentsMcp?: boolean };
+  capabilities?: { computerMcp?: boolean; agentsMcp?: boolean; implicitHostComputer?: boolean };
   install?: EngineInstall;
 }
 

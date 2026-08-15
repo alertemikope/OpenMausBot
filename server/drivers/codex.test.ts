@@ -169,6 +169,39 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(seen.env.PENNYLANE_READONLY).toBe("false");
   });
 
+  it("mounts explicit This Mac or Local VM Cua MCP without leaking its environment", async () => {
+    await create();
+    const dump = join(scratch, "dump.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({
+      threadId: "t-computer",
+      text: "inspect the selected computer",
+      integrations: {
+        localComputer: {
+          command: "/opt/openmausbot/cua-driver",
+          args: ["mcp", "--socket", "/tmp/cua.sock"],
+          env: { CUA_CONNECTION_TOKEN: "computer_secret_should_stay_out_of_argv" },
+        },
+      },
+    });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toEqual([
+      "-c",
+      'mcp_servers.computer.command="/opt/openmausbot/cua-driver"',
+      "-c",
+      'mcp_servers.computer.args=["mcp","--socket","/tmp/cua.sock"]',
+      "-c",
+      'mcp_servers.computer.env_vars=["CUA_CONNECTION_TOKEN"]',
+      "app-server",
+    ]);
+    expect(seen.argv.join(" ")).not.toContain("computer_secret_should_stay_out_of_argv");
+    expect(seen.env.CUA_CONNECTION_TOKEN).toBe("computer_secret_should_stay_out_of_argv");
+    expect(instance.adapter.capabilities).toMatchObject({ computerMcp: true, implicitHostComputer: false });
+  });
+
   it("streams agentMessage deltas without re-emitting the settled text", async () => {
     process.env.FAKE_CODEX_MODE = "stream";
     await create();
