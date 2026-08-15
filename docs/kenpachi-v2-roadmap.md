@@ -40,6 +40,18 @@ Baseline : `449bc10`
 
 Le prochain sous-lot actif est **V2.3 connecteurs de signaux externes**.
 
+**Lot B — observabilité locale : première tranche livrée.**
+
+- `GET /api/health` conserve le handshake app/pid mais expose désormais un
+  snapshot content-free providers/work/routines/proactivité/voix/intégrations ;
+- findings fermés pour provider absent, travail stale, cancellation suspendue,
+  scheduler arrêté et routine overdue ;
+- carte Runtime health dans Settings → General ;
+- diagnostic uniquement, sans auto-cancel ni retry implicite.
+
+Audit et preuves :
+[`kenpachi-comparative-audit-2026-08-15.md`](./kenpachi-comparative-audit-2026-08-15.md).
+
 ## 1. État réel
 
 ### Acquis
@@ -53,7 +65,8 @@ Le prochain sous-lot actif est **V2.3 connecteurs de signaux externes**.
 - routines durables créables et pilotables par la voix ;
 - transcript vocal local sans audio brut, historique et suppression ;
 - Gmail, Drive, Calendar, Pennylane, Pi Memory, CUA, peer agents et VM ;
-- application macOS signée, installée et couverte par 352 tests réussis.
+- application macOS signée, installée et couverte par 370 tests réussis
+  (8 scénarios optionnels ignorés dans l'environnement courant).
 
 ### Écart principal
 

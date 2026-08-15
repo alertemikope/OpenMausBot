@@ -15,6 +15,7 @@ import { ensureDirs, instanceConfigs, loadConfig, saveConfig, EVENTS_DIR, NATIVE
 import { resetPathCache } from "./env-path.js";
 import { googleWorkspaceIntegration } from "./google-workspace.js";
 import { piMemoryIntegration } from "./pi-memory.js";
+import { buildRuntimeHealthSnapshot } from "./health/snapshot.js";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.js";
 import { EventBus } from "./harness/bus.js";
 import { ProviderRegistry } from "./harness/registry.js";
@@ -1854,7 +1855,27 @@ const server = createServer(async (req, res) => {
         // child proves it is OURS by echoing its pid (a stray dev server has
         // the same API shape but a different pid)
         if (method === "GET" && path === "/api/health") {
-            return json(res, 200, { app: "openmausbot", pid: process.pid, static: Boolean(STATIC_DIR) });
+            const providerEntries = registry.entries();
+            return json(res, 200, buildRuntimeHealthSnapshot({
+                pid: process.pid,
+                static: Boolean(STATIC_DIR),
+                checkedAt: Date.now(),
+                uptimeSeconds: process.uptime(),
+                providers: {
+                    configured: providerEntries.length,
+                    loaded: providerEntries.filter((entry) => Boolean(entry.live)).length,
+                },
+                work: work.runtimeStatus(),
+                routines: routines.runtimeStatus(),
+                proactivity: proactive.runtimeStatus(),
+                voiceActive: realtimeBroker.hasLiveSession(),
+                integrations: {
+                    googleWorkspace: Boolean(googleWorkspaceIntegration()),
+                    piMemory: Boolean(piMemoryIntegration()),
+                    composio: Boolean(cfg.composio?.key),
+                    pennylane: Boolean(cfg.pennylane?.token),
+                },
+            }));
         }
         // ── provider instances (model picker) ──
         if (method === "GET" && path === "/api/instances") {

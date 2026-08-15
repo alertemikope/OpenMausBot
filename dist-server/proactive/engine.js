@@ -109,6 +109,13 @@ export class ProactiveEngine {
     listReceipts(limit = 200) {
         return this.receipts.slice(0, Math.max(1, Math.min(1_000, limit))).map((item) => ({ ...item, channels: [...item.channels] }));
     }
+    runtimeStatus() {
+        return {
+            enabled: this.policyValue.enabled,
+            unread: this.notifications.filter((item) => item.status === "unread").length,
+            snoozed: this.notifications.filter((item) => item.status === "snoozed").length,
+        };
+    }
     markSeen(id) {
         return this.patch(id, (item, at) => { item.status = "seen"; item.seenAt = at; });
     }

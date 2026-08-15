@@ -125,6 +125,18 @@ export class RoutineManager {
     isActiveThread(threadId) {
         return this.runs.some((run) => run.threadId === threadId && ["running", "waiting"].includes(run.status));
     }
+    runtimeStatus() {
+        const at = this.now();
+        return {
+            schedulerRunning: this.timer !== null,
+            enabled: this.routines.filter((routine) => routine.enabled).length,
+            active: this.runs.filter((run) => run.status === "running" || run.status === "waiting").length,
+            queued: this.runs.filter((run) => run.status === "queued").length,
+            // The scheduler ticks every ten seconds. A one-minute grace avoids
+            // diagnosing normal event-loop jitter as an overdue routine.
+            overdue: this.routines.filter((routine) => routine.enabled && routine.nextRunAt != null && routine.nextRunAt < at - 60_000).length,
+        };
+    }
     create(input) {
         const clean = sanitizeInput(input);
         if (this.options.botState(clean.botId) === "missing")

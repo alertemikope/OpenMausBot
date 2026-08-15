@@ -27,6 +27,13 @@ function signal(overrides: Partial<ProactiveSignal> = {}): ProactiveSignal {
 }
 
 describe("controlled proactive engine", () => {
+  it("reports only policy and notification counts to runtime health", () => {
+    const root = mkdtempSync(join(tmpdir(), "openmaus-proactive-"));
+    roots.push(root);
+    const engine = new ProactiveEngine({ file: join(root, "proactive.json") });
+    engine.ingest(signal());
+    expect(engine.runtimeStatus()).toEqual({ enabled: true, unread: 1, snoozed: 0 });
+  });
   it("deduplicates one hundred identical events into one notification", () => {
     const root = mkdtempSync(join(tmpdir(), "openmaus-proactive-"));
     roots.push(root);

@@ -36,6 +36,23 @@ afterEach(() => {
 });
 
 describe("WorkRegistry", () => {
+  it("reports stale autonomous work without classifying user waits as stuck", () => {
+    const h = fixture(2_000_000);
+    const running = h.registry.create({ origin: "chat", targetBotId: "bot-a", threadId: "thread-run", objective: "Long work" });
+    h.registry.claim(running.id);
+    const waiting = h.registry.create({ origin: "chat", targetBotId: "bot-b", threadId: "thread-wait", objective: "Needs approval" });
+    h.registry.claim(waiting.id);
+    h.registry.handleRuntimeEvent(event("request.opened", {
+      threadId: "thread-wait",
+      turnId: undefined,
+      requestId: "req-1",
+      requestType: "permission",
+      summary: "Approve",
+    }));
+    h.tick(31 * 60_000);
+
+    expect(h.registry.runtimeStatus()).toMatchObject({ active: 2, stale: 1, waiting: 1 });
+  });
   it("persists a private receipt and projects the provider lifecycle", () => {
     const h = fixture();
     const item = h.registry.create({

@@ -57,3 +57,10 @@ export const TERMINAL_WORK_STATES: readonly WorkItemState[] = [
   "interrupted_by_restart",
 ];
 
+export interface WorkRuntimeStatus {
+  active: number;
+  queued: number;
+  waiting: number;
+  stale: number;
+  cancellationStuck: number;
+}

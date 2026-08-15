@@ -64,6 +64,19 @@ describe("nextOccurrence", () => {
 });
 
 describe("RoutineManager", () => {
+  it("reports scheduler, queue and overdue definition health without executing work", () => {
+    const h = harness();
+    h.manager.create({
+      name: "Health check",
+      prompt: "Do not run yet",
+      botId: "maus-1",
+      schedule: { type: "once", at: new Date(2026, 7, 17, 8, 1).getTime() },
+    });
+    expect(h.manager.runtimeStatus()).toMatchObject({ schedulerRunning: false, enabled: 1, overdue: 0 });
+    h.manager.start();
+    expect(h.manager.runtimeStatus().schedulerRunning).toBe(true);
+    h.manager.stop();
+  });
   it("persists definitions separately from permanent run receipts", async () => {
     const h = harness();
     const routine = h.manager.create({

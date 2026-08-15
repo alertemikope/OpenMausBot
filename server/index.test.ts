@@ -174,6 +174,11 @@ describe("harness HTTP API", () => {
     expect(body.app).toBe("openmausbot");
     expect(typeof body.pid).toBe("number");
     expect(body.static).toBe(true);
+    expect(body.status).toBe("degraded");
+    expect(body.components.providers).toMatchObject({ level: "error", configured: 1, loaded: 0, unavailable: 1 });
+    expect(body.components.routines.schedulerRunning).toBe(true);
+    expect(body.findings).toContainEqual(expect.objectContaining({ code: "providers.none_loaded", severity: "error" }));
+    expect(JSON.stringify(body)).not.toMatch(/Interrupted smoke work|Provider unavailable|access.?token|bearer/i);
   });
 
   it("brokers one-shot realtime offers without exposing OAuth", async () => {

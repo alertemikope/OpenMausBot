@@ -12,6 +12,7 @@ import {
   type WorkItem,
   type WorkItemCreate,
   type WorkItemState,
+  type WorkRuntimeStatus,
 } from "./contracts.ts";
 
 type WorkFile = { version: 1; items: WorkItem[] };
@@ -147,6 +148,22 @@ export class WorkRegistry {
       .filter((candidate) => candidate.targetBotId === targetBotId && activeStates.has(candidate.state))
       .sort((left, right) => (right.startedAt ?? 0) - (left.startedAt ?? 0) || right.createdAt - left.createdAt)[0];
     return item ? clone(item) : undefined;
+  }
+
+  runtimeStatus(options: { staleAfterMs?: number; cancellationAfterMs?: number } = {}): WorkRuntimeStatus {
+    const at = this.now();
+    const active = this.items.filter((item) => activeStates.has(item.state));
+    const staleAfterMs = Math.max(60_000, options.staleAfterMs ?? 30 * 60_000);
+    const cancellationAfterMs = Math.max(10_000, options.cancellationAfterMs ?? 2 * 60_000);
+    return {
+      active: active.length,
+      queued: active.filter((item) => item.state === "queued").length,
+      waiting: active.filter((item) => item.state === "waiting_approval" || item.state === "waiting_input").length,
+      // Waiting on the user is not a stuck provider. Only autonomous running
+      // work with no fresh provider event is advisory-stale.
+      stale: active.filter((item) => item.state === "running" && at - item.updatedAt > staleAfterMs).length,
+      cancellationStuck: active.filter((item) => item.cancelRequestedAt != null && at - item.cancelRequestedAt > cancellationAfterMs).length,
+    };
   }
 
   claim(id: string): boolean {

@@ -56,3 +56,9 @@ export interface ProactiveReceipt {
   channels: ProactiveChannel[];
   createdAt: number;
 }
+
+export interface ProactiveRuntimeStatus {
+  enabled: boolean;
+  unread: number;
+  snoozed: number;
+}

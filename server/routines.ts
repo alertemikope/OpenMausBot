@@ -95,6 +95,14 @@ export interface RoutineManagerOptions {
   interruptTurn?: (botId: string, threadId: string, runOn: RoutineRunOn) => Promise<void>;
 }
 
+export interface RoutineRuntimeStatus {
+  schedulerRunning: boolean;
+  enabled: number;
+  active: number;
+  queued: number;
+  overdue: number;
+}
+
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const CATCH_UP_MS = 12 * 60 * 60_000;
 const MAX_RUNS = 2_000;
@@ -216,6 +224,19 @@ export class RoutineManager {
     return this.runs.some(
       (run) => run.threadId === threadId && ["running", "waiting"].includes(run.status),
     );
+  }
+
+  runtimeStatus(): RoutineRuntimeStatus {
+    const at = this.now();
+    return {
+      schedulerRunning: this.timer !== null,
+      enabled: this.routines.filter((routine) => routine.enabled).length,
+      active: this.runs.filter((run) => run.status === "running" || run.status === "waiting").length,
+      queued: this.runs.filter((run) => run.status === "queued").length,
+      // The scheduler ticks every ten seconds. A one-minute grace avoids
+      // diagnosing normal event-loop jitter as an overdue routine.
+      overdue: this.routines.filter((routine) => routine.enabled && routine.nextRunAt != null && routine.nextRunAt < at - 60_000).length,
+    };
   }
 
   create(input: RoutineInput): Routine {

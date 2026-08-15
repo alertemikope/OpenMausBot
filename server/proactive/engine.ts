@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 
 import { writeFileAtomic } from "../atomic.ts";
 import { DATA_DIR } from "../config.ts";
-import type { ProactiveNotification, ProactivePolicy, ProactiveReceipt, ProactiveSignal } from "./contracts.ts";
+import type { ProactiveNotification, ProactivePolicy, ProactiveReceipt, ProactiveRuntimeStatus, ProactiveSignal } from "./contracts.ts";
 import { DEFAULT_PROACTIVE_POLICY, deliveryChannels, normalizePolicy } from "./policies.ts";
 
 type ProactiveFile = {
@@ -134,6 +134,14 @@ export class ProactiveEngine {
 
   listReceipts(limit = 200): ProactiveReceipt[] {
     return this.receipts.slice(0, Math.max(1, Math.min(1_000, limit))).map((item) => ({ ...item, channels: [...item.channels] }));
+  }
+
+  runtimeStatus(): ProactiveRuntimeStatus {
+    return {
+      enabled: this.policyValue.enabled,
+      unread: this.notifications.filter((item) => item.status === "unread").length,
+      snoozed: this.notifications.filter((item) => item.status === "snoozed").length,
+    };
   }
 
   markSeen(id: string): ProactiveNotification | undefined {

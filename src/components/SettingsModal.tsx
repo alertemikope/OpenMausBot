@@ -11,6 +11,7 @@ import { LocalComputerSection } from "./LocalComputerSection";
 import { Card } from "./SettingsPrimitives";
 import { VoiceSettings } from "./VoiceSettings";
 import { ProactiveSettings } from "./ProactiveSettings";
+import { RuntimeHealthCard } from "./RuntimeHealthCard";
 import { cn } from "@/lib/cn";
 
 const SECTIONS: Array<{ id: AppSettingsSection; label: string; icon: typeof User }> = [
@@ -198,6 +199,7 @@ export function SettingsModal() {
                 <Card title="Profile" subtitle="Shown in the sidebar. Saved as you go.">
                   <ProfileFields />
                 </Card>
+                <RuntimeHealthCard />
                 <UpdatesRow />
               </>
             )}
