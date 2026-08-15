@@ -70,6 +70,17 @@ export interface AgentConsultRuntime {
 export type AgentControlMode = "status" | "cancel" | "steer" | "followup";
 export type AgentControlResult = { ok: boolean; message: string };
 
+export type VoiceRoutineRequest = {
+  action: "create" | "list" | "pause" | "resume" | "delete" | "run_now";
+  name?: string;
+  prompt?: string;
+  targetId?: string;
+  scheduleType?: "once" | "daily";
+  at?: string;
+  time?: string;
+  weekdays?: number[];
+};
+
 export type VoiceConfirmation =
   | { type: "none" }
   | {

@@ -137,6 +137,41 @@ describe("GPT-Live delegation controller", () => {
     ]);
   });
 
+  it("creates an explicit autonomous routine through the dedicated GA tool", async () => {
+    const socket = new FakeSocket();
+    const manageRoutine = vi.fn(async () => ({ ok: true, message: "Scheduled Morning brief with Codex at 08:30." }));
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-1",
+      targetId: "luna",
+      targets: [{ id: "luna", name: "Luna Max" }, { id: "codex", name: "Codex" }],
+      socket,
+      transport: "ga-realtime",
+      runtime: { run: vi.fn() },
+      control: vi.fn(),
+      respondToRequest: vi.fn(),
+      manageRoutine,
+      onFatal: vi.fn(),
+    });
+    const event = JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "routine_manage",
+      call_id: "routine-1",
+      arguments: JSON.stringify({ action: "create", routine_name: "Morning brief", prompt: "Check mail", target_id: "codex", schedule_type: "daily", time: "08:30" }),
+    });
+    controller.handle(event);
+    controller.handle(event);
+    await vi.waitFor(() => expect(manageRoutine).toHaveBeenCalledOnce());
+    expect(manageRoutine).toHaveBeenCalledWith(expect.objectContaining({
+      action: "create",
+      name: "Morning brief",
+      prompt: "Check mail",
+      targetId: "codex",
+      scheduleType: "daily",
+      time: "08:30",
+    }));
+    await vi.waitFor(() => expect(socket.sent.map((payload) => JSON.parse(payload)).some((payload) => payload.item?.output?.includes("Scheduled Morning brief"))).toBe(true));
+  });
+
   it("uses the GA structured mode so a paraphrased status request does not replace active work", async () => {
     const socket = new FakeSocket();
     const control = vi.fn(async () => ({ ok: true, message: "Still running." }));

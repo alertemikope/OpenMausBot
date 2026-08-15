@@ -22,6 +22,7 @@ import { mentionedBots, roomResponders, Store } from "./store.js";
 import { narrateTool } from "./speech-text.js";
 import { readCuaConnection } from "./local-computer.js";
 import { RoutineManager } from "./routines.js";
+import { manageVoiceRoutine } from "./realtime-voice/routine-manager.js";
 import { HarnessAgentConsultRuntime } from "./realtime-voice/agent-consult.js";
 import { ElectronOAuthClient } from "./realtime-voice/oauth-client.js";
 import { RealtimeSessionBroker } from "./realtime-voice/session-broker.js";
@@ -691,6 +692,17 @@ const realtimeBroker = new RealtimeSessionBroker({
     activeAgentTargets: () => agentConsult.activeTargets(),
     controlAgent: (input) => agentConsult.control(input),
     respondToRequest: (input) => agentConsult.respondToRequest(input),
+    manageRoutine: async (input) => {
+        if (!routines)
+            throw new Error("the routine scheduler is still starting");
+        return manageVoiceRoutine(input, {
+            routines,
+            bot: (id) => {
+                const bot = store.bot(id);
+                return bot ? { id: bot.id, name: bot.name } : undefined;
+            },
+        });
+    },
 });
 // ── routines: persisted definitions → detached bot tasks ───────────────
 // The scheduler owns timing and receipts; the existing harness remains the

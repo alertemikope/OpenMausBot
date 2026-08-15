@@ -175,6 +175,16 @@ Voice settings expose the same timeline and an explicit, confirmed **Clear
 history** action (`DELETE /api/realtime/history`).
 Closing the voice line stops capture/playback but does not cancel harness tasks.
 
+Explicit scheduling language can create and manage the existing durable routine
+scheduler directly from Jarvis. GA Realtime uses the structured
+`routine_manage` tool; GPT-Live uses a bounded `[OPENMAUS_ROUTINE]` delegation
+envelope parsed by the same validator. Supported actions are create, list,
+pause, resume, delete, and run-now. Creation requires an existing target bot,
+complete task instructions, and either a future ISO timestamp or a validated
+local `HH:MM` daily schedule. Ordinary immediate work is never silently turned
+into a recurring routine. Routine execution continues to use the normal harness,
+permission policy, detached task threads, receipts, and restart recovery.
+
 ## Message playback
 
 The optional **Read aloud** button is separate from Jarvis. It uses the free

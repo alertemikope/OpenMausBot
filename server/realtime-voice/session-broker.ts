@@ -12,6 +12,7 @@ import type {
   LiveSessionCreated,
   LiveSessionPublic,
   OAuthAccessProvider,
+  VoiceRoutineRequest,
 } from "./contracts.ts";
 import { LIVE_MODEL } from "./contracts.ts";
 import { buildLiveSession, createLiveCall, parseLiveEvent, type LiveRequestIds } from "./openai-live-wire.ts";
@@ -47,6 +48,7 @@ type BrokerOptions = {
   activeAgentTargets?: () => string[];
   controlAgent: (input: { voiceSessionId: string; targetId: string; mode: AgentControlMode; text: string }) => Promise<AgentControlResult>;
   respondToRequest: (input: { targetId: string; threadId: string; requestId: string; behavior: "allow" | "deny" }) => Promise<void>;
+  manageRoutine?: (input: VoiceRoutineRequest) => Promise<{ ok: boolean; message: string }>;
 };
 
 class BrowserRelaySocket extends EventEmitter {
@@ -187,6 +189,7 @@ export class RealtimeSessionBroker {
         activeTargets: this.options.activeAgentTargets,
         control: this.options.controlAgent,
         respondToRequest: this.options.respondToRequest,
+        manageRoutine: this.options.manageRoutine,
         onFatal: () => void this.closeSession(session.sessionId),
         onSessionStarted: (expiresAt) => {
           if (expiresAt) session.expiresAt = Math.min(session.expiresAt, expiresAt * 1_000);
@@ -311,6 +314,7 @@ function buildGaRealtimeSetup(live: ReturnType<typeof buildLiveSession>, targets
         gaInstructions,
         "For every request needing facts, reasoning, current state, or action, call agent_consult and then briefly speak its result.",
         "Use agent_consult for status, cancellation, steering, follow-ups, and permission decisions too.",
+        "Use routine_manage only when the user explicitly asks to schedule, repeat, pause, resume, delete, list, or immediately run autonomous recurring work. Never silently turn an ordinary task into a routine.",
         "Set agent_consult.mode from the user's intent: task for new work, status for progress, cancel to stop, steer to redirect now, followup to queue later. Never turn a status request into a new task.",
         "When the layer asks the user for an exact yes/no permission confirmation, do not call agent_consult for the confirmation utterance. The trusted transcript handler resolves it; only acknowledge naturally.",
         targets.length ? `For work assigned to a named agent, set target_id to its exact id from this catalog: ${targets.map((target) => `${target.name}=${target.id}`).join(", ")}.` : "",
@@ -322,29 +326,55 @@ function buildGaRealtimeSetup(live: ReturnType<typeof buildLiveSession>, targets
         },
         output: { voice: live.audio.output.voice },
       },
-      tools: [{
-        type: "function",
-        name: "agent_consult",
-        description: "Delegate reasoning, current information, status, controls, permissions, or actions to the selected OpenMausBot agent.",
-        parameters: {
-          type: "object",
-          properties: {
-            mode: {
-              type: "string",
-              enum: ["task", "status", "cancel", "steer", "followup"],
-              description: "Use task for new work, status/cancel/steer for the active delegated task, and followup for work to run afterward.",
+      tools: [
+        {
+          type: "function",
+          name: "agent_consult",
+          description: "Delegate reasoning, current information, status, controls, permissions, or actions to the selected OpenMausBot agent.",
+          parameters: {
+            type: "object",
+            properties: {
+              mode: {
+                type: "string",
+                enum: ["task", "status", "cancel", "steer", "followup"],
+                description: "Use task for new work, status/cancel/steer for the active delegated task, and followup for work to run afterward.",
+              },
+              prompt: { type: "string", description: "The complete user request for the selected agent. Preserve its control intent." },
+              target_id: {
+                type: "string",
+                ...(targets.length ? { enum: targets.map((target) => target.id) } : {}),
+                description: "Exact OpenMaus agent id. Omit only to use the default call agent.",
+              },
             },
-            prompt: { type: "string", description: "The complete user request for the selected agent. Preserve its control intent." },
-            target_id: {
-              type: "string",
-              ...(targets.length ? { enum: targets.map((target) => target.id) } : {}),
-              description: "Exact OpenMaus agent id. Omit only to use the default call agent.",
-            },
+            required: ["mode", "prompt"],
+            additionalProperties: false,
           },
-          required: ["mode", "prompt"],
-          additionalProperties: false,
         },
-      }],
+        {
+          type: "function",
+          name: "routine_manage",
+          description: "Create or manage explicit autonomous OpenMausBot routines. Use only for a clear scheduling or routine-management request.",
+          parameters: {
+            type: "object",
+            properties: {
+              action: { type: "string", enum: ["create", "list", "pause", "resume", "delete", "run_now"] },
+              routine_name: { type: "string", description: "Short routine name; required except for list." },
+              prompt: { type: "string", description: "Complete autonomous task instructions; required for create." },
+              target_id: {
+                type: "string",
+                ...(targets.length ? { enum: targets.map((target) => target.id) } : {}),
+                description: "Exact agent id. Omit only to use the default call agent.",
+              },
+              schedule_type: { type: "string", enum: ["once", "daily"], description: "Required for create." },
+              at: { type: "string", description: "ISO-8601 local or offset timestamp for a one-time routine." },
+              time: { type: "string", description: "Local 24-hour HH:MM time for a daily routine." },
+              weekdays: { type: "array", items: { type: "integer", minimum: 0, maximum: 6 }, description: "0=Sunday through 6=Saturday; omit for every day." },
+            },
+            required: ["action"],
+            additionalProperties: false,
+          },
+        },
+      ],
       tool_choice: "auto",
     },
   }];

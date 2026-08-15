@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { LIVE_MODEL, LIVE_VOICES, type LiveTargetDescriptor, type LiveVoice, type OAuthAccess } from "./contracts.ts";
+import { LIVE_MODEL, LIVE_VOICES, type LiveTargetDescriptor, type LiveVoice, type OAuthAccess, type VoiceRoutineRequest } from "./contracts.ts";
 
 const LIVE_URL = "https://api.openai.com/v1/live";
 const GA_MODEL = "gpt-realtime-2.1";
@@ -29,6 +29,7 @@ export type LiveInboundEvent =
   | { kind: "session-started"; expiresAt?: number }
   | { kind: "transcript"; role: "user" | "assistant"; text: string; done: boolean }
   | { kind: "delegation"; id: string; prompt: string; targetId?: string; mode?: "task" | "status" | "cancel" | "steer" | "followup" }
+  | ({ kind: "routine"; id: string } & VoiceRoutineRequest)
   | { kind: "response-finished" }
   | { kind: "error"; message: string; fatalAuth: boolean }
   | { kind: "unknown"; eventType: string };
@@ -71,6 +72,7 @@ export function buildLiveSession(params: {
       "You are OpenMausBot's realtime voice layer. You have no tools of your own.",
       "Delegate requests requiring reasoning, current information, or actions to the client.",
       "For active-task controls, begin delegated text with exactly one marker: [OPENMAUS_CONTROL:status], [OPENMAUS_CONTROL:cancel], [OPENMAUS_CONTROL:steer], or [OPENMAUS_CONTROL:followup]. Preserve the user's request after it.",
+      "For an explicit scheduling/routine request, delegate exactly [OPENMAUS_ROUTINE] followed by one compact JSON object using routine_manage fields: action, routine_name, prompt, target_id, schedule_type, at, time, weekdays. Never use this marker for ordinary immediate work.",
       "Commentary context is silent. Speakable context is delivered naturally and briefly.",
       "Never claim an action succeeded before the delegated agent reports completion.",
       "Speaking over you only interrupts speech; it never cancels delegated work.",
@@ -100,6 +102,34 @@ function delegationTarget(prompt: string): { prompt: string; targetId?: string }
   return match
     ? { prompt: prompt.slice(match[0].length).trim(), targetId: match[1] }
     : { prompt: prompt.trim() };
+}
+
+function routineEvent(id: string, value: unknown): LiveInboundEvent | undefined {
+  const decodedArgs = record(value);
+  const action = boundedText(decodedArgs?.action, 32);
+  if (action !== "create" && action !== "list" && action !== "pause" && action !== "resume" && action !== "delete" && action !== "run_now") return undefined;
+  const nameArg = boundedText(decodedArgs?.routine_name, 120)?.trim();
+  const prompt = boundedText(decodedArgs?.prompt)?.trim();
+  const targetId = boundedText(decodedArgs?.target_id, 128)?.trim();
+  const scheduleCandidate = boundedText(decodedArgs?.schedule_type, 32);
+  const scheduleType = scheduleCandidate === "once" || scheduleCandidate === "daily" ? scheduleCandidate : undefined;
+  const at = boundedText(decodedArgs?.at, 128)?.trim();
+  const time = boundedText(decodedArgs?.time, 16)?.trim();
+  const weekdays = Array.isArray(decodedArgs?.weekdays)
+    ? decodedArgs.weekdays.filter((item): item is number => Number.isInteger(item) && Number(item) >= 0 && Number(item) <= 6).slice(0, 7)
+    : undefined;
+  return {
+    kind: "routine",
+    id,
+    action,
+    ...(nameArg ? { name: nameArg } : {}),
+    ...(prompt ? { prompt } : {}),
+    ...(targetId ? { targetId } : {}),
+    ...(scheduleType ? { scheduleType } : {}),
+    ...(at ? { at } : {}),
+    ...(time ? { time } : {}),
+    ...(weekdays?.length ? { weekdays } : {}),
+  };
 }
 
 export function resolveChatGptIdentity(accessToken: string): { accountId: string; expiresAt?: number } {
@@ -254,6 +284,14 @@ export function parseLiveEvent(payload: string): LiveInboundEvent | null {
       .filter((part) => part?.type === "input_text")
       .map((part) => boundedText(part?.text) ?? "")
       .join("");
+    if (item?.type === "delegation" && item.target === "client" && id && prompt.trim().startsWith("[OPENMAUS_ROUTINE]")) {
+      try {
+        return routineEvent(id, JSON.parse(prompt.trim().slice("[OPENMAUS_ROUTINE]".length).trim()))
+          ?? { kind: "ignored", eventType: type };
+      } catch {
+        return { kind: "ignored", eventType: type };
+      }
+    }
     const routed = delegationTarget(prompt);
     return item?.type === "delegation" && item.target === "client" && id && routed.prompt
       ? { kind: "delegation", id, ...routed }
@@ -274,6 +312,12 @@ export function parseLiveEvent(payload: string): LiveInboundEvent | null {
           ? candidateMode
           : undefined;
         if (prompt) return { kind: "delegation", id, prompt, ...(targetId ? { targetId } : {}), ...(mode ? { mode } : {}) };
+      } catch {}
+    }
+    if (name === "routine_manage" && id && args) {
+      try {
+        const routine = routineEvent(id, JSON.parse(args));
+        if (routine) return routine;
       } catch {}
     }
     return { kind: "ignored", eventType: type };

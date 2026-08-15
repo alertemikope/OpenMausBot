@@ -55,6 +55,10 @@ export class LiveDelegationController {
         if (this.seenDelegations.has(event.id))
             return;
         this.seenDelegations.add(event.id);
+        if (event.kind === "routine") {
+            void this.routeRoutine(event.id, event);
+            return;
+        }
         void this.route({
             id: event.id,
             prompt: event.prompt,
@@ -207,6 +211,22 @@ export class LiveDelegationController {
         }
         catch {
             this.send(owner.delegationId, "That approval request changed or expired, so I did not authorize it.", "speakable");
+        }
+    }
+    async routeRoutine(id, request) {
+        if (!this.options.manageRoutine) {
+            this.send(id, "Routine management is unavailable in this OpenMausBot session.", "speakable", true);
+            return;
+        }
+        try {
+            const result = await this.options.manageRoutine({
+                ...request,
+                targetId: request.targetId ?? this.options.targetId,
+            });
+            this.send(id, result.message, "speakable", true);
+        }
+        catch (error) {
+            this.send(id, `I did not change the routine: ${error instanceof Error ? error.message.slice(0, 220) : "unknown error"}`, "speakable", true);
         }
     }
     launch(targetId, delegation) {

@@ -15,6 +15,7 @@ describe("realtime session broker", () => {
       runAgentConsult: vi.fn(async () => ({ text: "done" })),
       controlAgent: vi.fn(async () => ({ ok: false, message: "none" })),
       respondToRequest: vi.fn(async () => {}),
+      manageRoutine: vi.fn(async () => ({ ok: true, message: "scheduled" })),
     });
     const created = broker.createSession({ targetId: "bot-1", voice: "marin" });
     expect(broker.list()).toEqual([expect.objectContaining({ sessionId: created.sessionId, targetId: "bot-1" })]);
@@ -32,6 +33,8 @@ describe("realtime session broker", () => {
     const setup = JSON.parse(outbound[0]!);
     expect(setup.session.instructions).toContain("target_id");
     expect(setup.session.tools[0].parameters.properties.target_id.enum).toEqual(["bot-1", "codex"]);
+    expect(setup.session.tools.map((tool: { name: string }) => tool.name)).toEqual(["agent_consult", "routine_manage"]);
+    expect(setup.session.tools[1].parameters.properties.target_id.enum).toEqual(["bot-1", "codex"]);
     expect(broker.ingestEvent(created.sessionId, JSON.stringify({
       type: "conversation.item.input_audio_transcription.completed",
       transcript: "Vérifie mes mails",

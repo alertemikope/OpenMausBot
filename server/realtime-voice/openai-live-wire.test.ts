@@ -103,6 +103,39 @@ describe("GPT-Live wire", () => {
       type: "delegation.created",
       item: { type: "delegation", target: "client", id: "d2", content: [{ type: "input_text", text: "[OPENMAUS_TARGET:codex] Review this" }] },
     }))).toEqual({ kind: "delegation", id: "d2", prompt: "Review this", targetId: "codex" });
+    expect(parseLiveEvent(JSON.stringify({
+      type: "response.function_call_arguments.done",
+      name: "routine_manage",
+      call_id: "routine-1",
+      arguments: JSON.stringify({
+        action: "create",
+        routine_name: "Morning brief",
+        prompt: "Summarize urgent mail",
+        target_id: "codex",
+        schedule_type: "daily",
+        time: "08:30",
+        weekdays: [1, 2, 3, 4, 5, 99],
+      }),
+    }))).toEqual({
+      kind: "routine",
+      id: "routine-1",
+      action: "create",
+      name: "Morning brief",
+      prompt: "Summarize urgent mail",
+      targetId: "codex",
+      scheduleType: "daily",
+      time: "08:30",
+      weekdays: [1, 2, 3, 4, 5],
+    });
+    expect(parseLiveEvent(JSON.stringify({
+      type: "delegation.created",
+      item: {
+        type: "delegation",
+        target: "client",
+        id: "routine-live",
+        content: [{ type: "input_text", text: '[OPENMAUS_ROUTINE] {"action":"pause","routine_name":"Morning brief"}' }],
+      },
+    }))).toEqual({ kind: "routine", id: "routine-live", action: "pause", name: "Morning brief" });
     expect(parseLiveEvent(JSON.stringify({ type: "response.done", response: { status: "completed" } }))).toEqual({ kind: "response-finished" });
     expect(parseLiveEvent(JSON.stringify({ type: "response.output_audio_transcript.done", transcript: "Terminé" }))).toEqual({
       kind: "transcript",

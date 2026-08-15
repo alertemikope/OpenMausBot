@@ -44,6 +44,11 @@ La continuité de voix ajoute maintenant un journal local borné des segments
 finalisés, sans audio brut, et injecte seulement une carte compacte des appels
 récents dans la session suivante.
 
+L'autonomie planifiée est aussi reliée au dialogue : « planifie chaque jour… »,
+« mets en pause la routine… », « liste mes routines » ou « lance maintenant… »
+passent par un contrat structuré dédié et le `RoutineManager` durable existant.
+Une demande immédiate ordinaire ne devient jamais implicitement récurrente.
+
 Recette live du 15 août 2026 sur l'application réellement installée :
 
 - connexion `gpt-realtime-2.1` OAuth/WebRTC, audio entrant et sortant ;

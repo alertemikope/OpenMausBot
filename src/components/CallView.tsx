@@ -352,7 +352,7 @@ function RealtimeCall({ bot }: { bot: Bot }) {
           <PhoneOff size={16} /> Hang up
         </button>
       </div>
-      <div className="mt-2 text-[10.5px] text-ink-secondary/60">The chat and sidebar stay available · “Annule la tâche” cancels agent work</div>
+      <div className="mt-2 text-[10.5px] text-ink-secondary/60">Chat stays available · “Demande à Codex…” routes work · “Planifie chaque jour…” creates an autonomous routine</div>
       </>}
     </section>
   );

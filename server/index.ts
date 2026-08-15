@@ -32,6 +32,7 @@ import { mentionedBots, roomResponders, Store, type GroupDefaultResponder, type 
 import { narrateTool } from "./speech-text.ts";
 import { readCuaConnection } from "./local-computer.ts";
 import { RoutineManager, type RoutineRunOn } from "./routines.ts";
+import { manageVoiceRoutine } from "./realtime-voice/routine-manager.ts";
 import { HarnessAgentConsultRuntime } from "./realtime-voice/agent-consult.ts";
 import { ElectronOAuthClient } from "./realtime-voice/oauth-client.ts";
 import { RealtimeSessionBroker } from "./realtime-voice/session-broker.ts";
@@ -733,6 +734,16 @@ const realtimeBroker = new RealtimeSessionBroker({
   activeAgentTargets: () => agentConsult.activeTargets(),
   controlAgent: (input) => agentConsult.control(input),
   respondToRequest: (input) => agentConsult.respondToRequest(input),
+  manageRoutine: async (input) => {
+    if (!routines) throw new Error("the routine scheduler is still starting");
+    return manageVoiceRoutine(input, {
+      routines,
+      bot: (id) => {
+        const bot = store.bot(id);
+        return bot ? { id: bot.id, name: bot.name } : undefined;
+      },
+    });
+  },
 });
 
 // ── routines: persisted definitions → detached bot tasks ───────────────

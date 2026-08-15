@@ -1,7 +1,7 @@
 import type { RuntimeEvent } from "../contracts.ts";
 import { classifyAgentControl } from "./agent-control.ts";
 import { VoiceConfirmationController } from "./confirmation-controller.ts";
-import type { AgentControlMode, AgentControlResult, AgentConsultRuntime, LiveTargetDescriptor } from "./contracts.ts";
+import type { AgentControlMode, AgentControlResult, AgentConsultRuntime, LiveTargetDescriptor, VoiceRoutineRequest } from "./contracts.ts";
 import { chunkDelegationText, parseLiveEvent } from "./openai-live-wire.ts";
 import type { LiveSidebandSocket } from "./sideband.ts";
 
@@ -20,6 +20,7 @@ type ControllerOptions = {
   activeTargets?: () => string[];
   control: (input: { voiceSessionId: string; targetId: string; mode: AgentControlMode; text: string }) => Promise<AgentControlResult>;
   respondToRequest: (input: { targetId: string; threadId: string; requestId: string; behavior: "allow" | "deny" }) => Promise<void>;
+  manageRoutine?: (input: VoiceRoutineRequest) => Promise<{ ok: boolean; message: string }>;
   onFatal: (error: Error) => void;
   onSessionStarted?: (expiresAt?: number) => void;
 };
@@ -74,6 +75,10 @@ export class LiveDelegationController {
     if (event.kind === "unknown") return;
     if (this.seenDelegations.has(event.id)) return;
     this.seenDelegations.add(event.id);
+    if (event.kind === "routine") {
+      void this.routeRoutine(event.id, event);
+      return;
+    }
     void this.route({
       id: event.id,
       prompt: event.prompt,
@@ -230,6 +235,22 @@ export class LiveDelegationController {
         : "Denied. The agent will skip that exact action.", "speakable");
     } catch {
       this.send(owner.delegationId, "That approval request changed or expired, so I did not authorize it.", "speakable");
+    }
+  }
+
+  private async routeRoutine(id: string, request: VoiceRoutineRequest): Promise<void> {
+    if (!this.options.manageRoutine) {
+      this.send(id, "Routine management is unavailable in this OpenMausBot session.", "speakable", true);
+      return;
+    }
+    try {
+      const result = await this.options.manageRoutine({
+        ...request,
+        targetId: request.targetId ?? this.options.targetId,
+      });
+      this.send(id, result.message, "speakable", true);
+    } catch (error) {
+      this.send(id, `I did not change the routine: ${error instanceof Error ? error.message.slice(0, 220) : "unknown error"}`, "speakable", true);
     }
   }
 
