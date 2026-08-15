@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { DATA_DIR } from "./config.ts";
 import type { RuntimeEvent } from "./contracts.ts";
+import { writeFileAtomic } from "./atomic.ts";
 
 export type RoutineSchedule =
   | { type: "once"; at: number }
@@ -80,6 +81,7 @@ export interface RoutineManagerOptions {
   file?: string;
   now?: () => number;
   emit?: (payload: unknown) => void;
+  onRun?: (run: RoutineRun) => void;
   botState: (botId: string) => "ready" | "busy" | "missing";
   createTask: (botId: string, title: string) => { threadId: string } | null;
   startTurn: (
@@ -87,6 +89,7 @@ export interface RoutineManagerOptions {
     threadId: string,
     prompt: string,
     runOn: RoutineRunOn,
+    workItemId: string,
     onDispatchError: (message: string) => void,
   ) => Promise<void>;
   interruptTurn?: (botId: string, threadId: string, runOn: RoutineRunOn) => Promise<void>;
@@ -174,6 +177,9 @@ export class RoutineManager {
     } catch {
       this.routines = [];
       this.runs = [];
+    }
+    if (process.platform !== "win32") {
+      try { chmodSync(this.file, 0o600); } catch { /* first run or externally managed file */ }
     }
     // A local process cannot still own these turns after a full restart.
     let recovered = false;
@@ -404,7 +410,7 @@ export class RoutineManager {
             this.failThread(task.threadId, "The routine was deleted before it could start");
             continue;
           }
-          await this.options.startTurn(run.botId, task.threadId, prompt, run.runOn ?? "maus", (message) =>
+          await this.options.startTurn(run.botId, task.threadId, prompt, run.runOn ?? "maus", run.id, (message) =>
             this.failThread(task.threadId, message),
           );
         } catch (error) {
@@ -481,13 +487,16 @@ export class RoutineManager {
   }
 
   private emitRun(run: RoutineRun) {
+    this.options.onRun?.({ ...run });
     this.options.emit?.({ kind: "routine.run", run: { ...run } });
   }
 
   private save() {
-    mkdirSync(dirname(this.file), { recursive: true });
-    const temp = `${this.file}.tmp`;
-    writeFileSync(temp, JSON.stringify({ version: 1, routines: this.routines, runs: this.runs } satisfies RoutineFile, null, 2));
-    renameSync(temp, this.file);
+    mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+    writeFileAtomic(
+      this.file,
+      JSON.stringify({ version: 1, routines: this.routines, runs: this.runs } satisfies RoutineFile, null, 2),
+      0o600,
+    );
   }
 }

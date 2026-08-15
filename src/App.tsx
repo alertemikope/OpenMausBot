@@ -15,6 +15,7 @@ import { DesktopCapabilitiesProvider } from "@/components/DesktopCapabilities";
 import { RoutinesPage } from "@/components/RoutinesPage";
 import { NoEngines } from "@/components/NoEngines";
 import { CallOverlay } from "@/components/CallView";
+import { MissionControl } from "@/components/MissionControl";
 import { endCall, startCall, useOnCall } from "@/lib/call";
 
 function Shell() {
@@ -125,6 +126,7 @@ function Shell() {
       {/* The voice owner is window-global, not owned by the selected chat.
           Navigation therefore cannot unmount its WebRTC controller. */}
       <CallOverlay bot={callBot} />
+      <MissionControl />
       </div>
     </div>
   );

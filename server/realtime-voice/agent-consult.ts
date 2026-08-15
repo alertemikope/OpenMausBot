@@ -1,4 +1,5 @@
 import type { ProviderAdapter, RuntimeEvent } from "../contracts.ts";
+import type { WorkItem, WorkItemCreate } from "../work/contracts.ts";
 import type { AgentControlMode, AgentControlResult, AgentConsultRuntime } from "./contracts.ts";
 
 type Target = {
@@ -18,12 +19,26 @@ type ActiveRun = {
   tool?: string;
   progress?: string;
   awaitingApproval?: string;
+  workItemId?: string;
 };
 
 type HarnessAgentConsultDeps = {
   resolveTarget(targetId: string): Target | undefined;
-  startTurn(targetId: string, prompt: string, onDispatchError: (message: string) => void): Promise<void> | void;
+  startTurn(
+    targetId: string,
+    prompt: string,
+    onDispatchError: (message: string) => void,
+    workItemId: string | undefined,
+    voiceSessionId: string,
+  ): Promise<{ workItemId: string }> | { workItemId: string };
   subscribe(listener: (event: RuntimeEvent) => void): () => void;
+  work?: {
+    create(input: WorkItemCreate): WorkItem;
+    get(id: string): WorkItem | undefined;
+    claim(id: string): boolean;
+    activeForTarget(targetId: string): WorkItem | undefined;
+    list(options?: { active?: boolean }): WorkItem[];
+  };
 };
 
 export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
@@ -37,13 +52,39 @@ export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
   constructor(deps: HarnessAgentConsultDeps) { this.deps = deps; }
 
   activeTargets(): string[] {
-    return [...this.active.keys()];
+    return [...new Set([
+      ...this.active.keys(),
+      ...(this.deps.work?.list({ active: true }).map((item) => item.targetBotId) ?? []),
+    ])];
+  }
+
+  enqueue(input: { voiceSessionId: string; targetId: string; prompt: string }): { workItemId: string } {
+    const target = this.deps.resolveTarget(input.targetId);
+    if (!target) throw new Error("The selected OpenMaus bot no longer exists");
+    if (!this.deps.work) throw new Error("The durable work queue is unavailable");
+    const item = this.deps.work.create({
+      origin: "voice",
+      targetBotId: input.targetId,
+      threadId: target.threadId,
+      objective: input.prompt,
+      voiceSessionId: input.voiceSessionId,
+    });
+    return { workItemId: item.id };
   }
 
   run(input: Parameters<AgentConsultRuntime["run"]>[0]): Promise<{ text: string }> {
     const target = this.deps.resolveTarget(input.targetId);
     if (!target) return Promise.reject(new Error("The selected OpenMaus bot no longer exists"));
     if (target.busy) return Promise.reject(new Error("The selected bot is already working; ask for status, steer it, or cancel first"));
+    if (input.workItemId && this.deps.work) {
+      const queued = this.deps.work.get(input.workItemId);
+      if (!queued || queued.targetBotId !== input.targetId || queued.state !== "queued") {
+        return Promise.reject(new Error("That queued agent task is no longer available"));
+      }
+      if (!this.deps.work.claim(input.workItemId)) {
+        return Promise.reject(new Error("That queued agent task was already claimed"));
+      }
+    }
     const generation = ++this.generation;
     const run: ActiveRun = {
       generation,
@@ -52,6 +93,7 @@ export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
       threadId: target.threadId,
       startedAt: Date.now(),
       progress: "Starting the selected OpenMaus bot",
+      ...(input.workItemId ? { workItemId: input.workItemId } : {}),
     };
     this.active.set(input.targetId, run);
 
@@ -112,9 +154,15 @@ export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
         onAbort();
         return;
       }
-      Promise.resolve(this.deps.startTurn(input.targetId, input.prompt, (message) => finish(new Error(message)))).catch(
-        (error) => finish(error instanceof Error ? error : new Error(String(error))),
-      );
+      Promise.resolve(this.deps.startTurn(
+        input.targetId,
+        input.prompt,
+        (message) => finish(new Error(message)),
+        input.workItemId,
+        input.voiceSessionId,
+      )).then(({ workItemId }) => {
+        run.workItemId = workItemId;
+      }).catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
     });
   }
 
@@ -126,6 +174,15 @@ export class HarnessAgentConsultRuntime implements AgentConsultRuntime {
   }): Promise<AgentControlResult> {
     const run = this.active.get(input.targetId);
     if (!run) {
+      const work = this.deps.work?.activeForTarget(input.targetId);
+      if (input.mode === "status" && work) {
+        return {
+          ok: true,
+          message: work.state === "queued"
+            ? `The task is queued: ${work.objective}.`
+            : `${work.progress ?? "The agent is still working."}${work.currentTool ? ` Current tool: ${work.currentTool}.` : ""}`,
+        };
+      }
       return { ok: false, message: "There is no active delegated task." };
     }
     const target = this.deps.resolveTarget(run.targetId);

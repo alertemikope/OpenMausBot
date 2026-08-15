@@ -7,7 +7,7 @@ import type { LiveSidebandSocket } from "./sideband.ts";
 
 const MAX_RESULT_CHARS = 1_800;
 
-type Delegation = { id: string; prompt: string; targetId?: string; mode?: "task" | AgentControlMode };
+type Delegation = { id: string; prompt: string; targetId?: string; mode?: "task" | AgentControlMode; workItemId?: string };
 type ActiveDelegation = { delegation: Delegation; targetId: string; controller: AbortController; generation: number };
 type GaDelivery = { outputs?: Array<{ delegationId: string; text: string }>; instructions?: string };
 type ControllerOptions = {
@@ -170,7 +170,7 @@ export class LiveDelegationController {
     }
 
     if (intent?.mode === "followup") {
-      const queued = { ...delegation, prompt: intent.text, targetId };
+      const queued = this.enqueue({ ...delegation, prompt: intent.text, targetId });
       const queue = this.followups.get(targetId) ?? [];
       queue.push(queued);
       this.followups.set(targetId, queue);
@@ -202,9 +202,9 @@ export class LiveDelegationController {
       return;
     }
 
-    if (this.active.has(targetId)) {
+    if (this.active.has(targetId) || knownActiveTargets.includes(targetId)) {
       const queue = this.followups.get(targetId) ?? [];
-      queue.push({ ...delegation, targetId });
+      queue.push(this.enqueue({ ...delegation, targetId }));
       this.followups.set(targetId, queue);
       this.send(delegation.id, `${this.targetName(targetId)} is already working. I queued this request next.`, "speakable", this.options.transport !== "ga-realtime");
       return;
@@ -262,6 +262,7 @@ export class LiveDelegationController {
       voiceSessionId: this.options.voiceSessionId,
       targetId,
       prompt: delegation.prompt,
+      workItemId: delegation.workItemId,
       signal: controller.signal,
       onEvent: (event) => this.onRuntimeEvent(targetId, generation, delegation.id, event),
     }).then((result) => {
@@ -283,6 +284,16 @@ export class LiveDelegationController {
       if (!queue?.length) this.followups.delete(targetId);
       if (next) this.launch(targetId, next);
     });
+  }
+
+  private enqueue(delegation: Delegation & { targetId: string }): Delegation {
+    if (delegation.workItemId || !this.options.runtime.enqueue) return delegation;
+    const queued = this.options.runtime.enqueue({
+      voiceSessionId: this.options.voiceSessionId,
+      targetId: delegation.targetId,
+      prompt: delegation.prompt,
+    });
+    return { ...delegation, workItemId: queued.workItemId };
   }
 
   private onRuntimeEvent(targetId: string, generation: number, delegationId: string, event: RuntimeEvent): void {

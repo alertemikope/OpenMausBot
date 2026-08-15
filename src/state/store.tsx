@@ -15,6 +15,7 @@ import {
 } from "react";
 import type { MausColor, MausMotion } from "@/lib/mascot";
 import type { Routine, RoutineInput, RoutineRun } from "@/lib/routines";
+import type { WorkItem } from "@/lib/work";
 import { currentCall } from "@/lib/call";
 import { speaker } from "@/lib/tts";
 
@@ -203,6 +204,7 @@ interface AppState {
   activeView: "chat" | "routines";
   routines: Routine[];
   routineRuns: RoutineRun[];
+  workItems: WorkItem[];
   settingsOpen: boolean;
   pluginsOpen: boolean;
   computerOpen: boolean;
@@ -228,6 +230,10 @@ type Action =
   | { type: "routinePatched"; routine: Routine }
   | { type: "routineDeleted"; routineId: string }
   | { type: "routineRunPatched"; run: RoutineRun }
+  | { type: "workItemsHydrated"; items: WorkItem[] }
+  | { type: "workItemPatched"; item: WorkItem }
+  | { type: "cancelWork"; workItemId: string }
+  | { type: "markWorkSeen"; workItemId: string }
   | { type: "createRoutine"; input: RoutineInput }
   | { type: "updateRoutine"; routineId: string; patch: Partial<RoutineInput> }
   | { type: "deleteRoutine"; routineId: string }
@@ -375,6 +381,15 @@ function reducer(state: AppState, action: Action): AppState {
         ? state.routineRuns.map((run) => (run.id === action.run.id ? action.run : run))
         : [action.run, ...state.routineRuns];
       return { ...state, routineRuns: runs.sort((a, b) => b.scheduledFor - a.scheduledFor) };
+    }
+    case "workItemsHydrated":
+      return { ...state, workItems: action.items };
+    case "workItemPatched": {
+      const exists = state.workItems.some((item) => item.id === action.item.id);
+      const items = exists
+        ? state.workItems.map((item) => item.id === action.item.id ? action.item : item)
+        : [action.item, ...state.workItems];
+      return { ...state, workItems: items.sort((left, right) => right.updatedAt - left.updatedAt).slice(0, 500) };
     }
     case "groupPatched": {
       const exists = state.groups.some((g) => g.id === action.group.id);
@@ -667,6 +682,8 @@ function reducer(state: AppState, action: Action): AppState {
     case "runRoutine":
     case "cancelRoutineRun":
     case "markRoutineRunSeen":
+    case "cancelWork":
+    case "markWorkSeen":
       return state;
   }
 }
@@ -683,6 +700,7 @@ const initialState: AppState = {
   activeView: "chat",
   routines: [],
   routineRuns: [],
+  workItems: [],
   settingsOpen: false,
   pluginsOpen: false,
   computerOpen: false,
@@ -816,6 +834,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "markRoutineRunSeen":
           api(`/api/routine-runs/${action.runId}/seen`, { method: "POST" }).catch(showError);
+          break;
+        case "cancelWork":
+          api(`/api/work/${action.workItemId}/cancel`, { method: "POST" }).catch(showError);
+          break;
+        case "markWorkSeen":
+          api(`/api/work/${action.workItemId}/seen`, { method: "POST" }).catch(showError);
           break;
         case "send":
           api(`/api/bots/${action.botId}/messages`, {
@@ -1049,6 +1073,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       api("/api/routines")
         .then(({ routines, runs }) => alive && rawDispatch({ type: "routinesHydrated", routines, runs }))
         .catch(() => {});
+      api("/api/work")
+        .then(({ items }) => alive && rawDispatch({ type: "workItemsHydrated", items }))
+        .catch(() => {});
     };
     loadAll();
 
@@ -1134,6 +1161,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           break;
         case "routine.run":
           rawDispatch({ type: "routineRunPatched", run: frame.run });
+          break;
+        case "work.item":
+          rawDispatch({ type: "workItemPatched", item: frame.item });
           break;
         case "runtime": {
           const event = frame.event;

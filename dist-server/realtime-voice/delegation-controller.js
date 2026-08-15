@@ -145,7 +145,7 @@ export class LiveDelegationController {
             return;
         }
         if (intent?.mode === "followup") {
-            const queued = { ...delegation, prompt: intent.text, targetId };
+            const queued = this.enqueue({ ...delegation, prompt: intent.text, targetId });
             const queue = this.followups.get(targetId) ?? [];
             queue.push(queued);
             this.followups.set(targetId, queue);
@@ -176,9 +176,9 @@ export class LiveDelegationController {
             this.send(delegation.id, result.message, "speakable", true);
             return;
         }
-        if (this.active.has(targetId)) {
+        if (this.active.has(targetId) || knownActiveTargets.includes(targetId)) {
             const queue = this.followups.get(targetId) ?? [];
-            queue.push({ ...delegation, targetId });
+            queue.push(this.enqueue({ ...delegation, targetId }));
             this.followups.set(targetId, queue);
             this.send(delegation.id, `${this.targetName(targetId)} is already working. I queued this request next.`, "speakable", this.options.transport !== "ga-realtime");
             return;
@@ -237,6 +237,7 @@ export class LiveDelegationController {
             voiceSessionId: this.options.voiceSessionId,
             targetId,
             prompt: delegation.prompt,
+            workItemId: delegation.workItemId,
             signal: controller.signal,
             onEvent: (event) => this.onRuntimeEvent(targetId, generation, delegation.id, event),
         }).then((result) => {
@@ -261,6 +262,16 @@ export class LiveDelegationController {
             if (next)
                 this.launch(targetId, next);
         });
+    }
+    enqueue(delegation) {
+        if (delegation.workItemId || !this.options.runtime.enqueue)
+            return delegation;
+        const queued = this.options.runtime.enqueue({
+            voiceSessionId: this.options.voiceSessionId,
+            targetId: delegation.targetId,
+            prompt: delegation.prompt,
+        });
+        return { ...delegation, workItemId: queued.workItemId };
     }
     onRuntimeEvent(targetId, generation, delegationId, event) {
         if (this.stopped || this.active.get(targetId)?.generation !== generation)

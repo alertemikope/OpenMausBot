@@ -2,7 +2,7 @@
 //   { "xai": {"key":"xai-…"}, "composio": {"key":"ck_…"}, "box": {"token":"…"},
 //     "pennylane": {"token":"…", "readonly":false},
 //     "instances": { "<instanceId>": {"driver":"grok", …} } }
-import { readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { chmodSync, readFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -41,7 +41,16 @@ export function ensureDirs() {
       /* cross-device or busy — fall through to a fresh dir */
     }
   }
-  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) mkdirSync(dir, { recursive: true });
+  for (const dir of [DATA_DIR, EVENTS_DIR, NATIVE_DIR]) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") {
+      try {
+        chmodSync(dir, 0o700);
+      } catch {
+        /* a read-only or externally managed directory fails later at its real IO boundary */
+      }
+    }
+  }
 }
 
 export function loadConfig(): AppConfig {

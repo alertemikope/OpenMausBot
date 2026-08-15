@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeFileAtomic } from "../atomic.js";
 import { DATA_DIR } from "../config.js";
@@ -13,7 +13,13 @@ export class VoiceTranscriptStore {
     directory;
     constructor(directory = join(DATA_DIR, "voice-calls")) {
         this.directory = directory;
-        mkdirSync(this.directory, { recursive: true });
+        mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+        if (process.platform !== "win32") {
+            try {
+                chmodSync(this.directory, 0o700);
+            }
+            catch { /* surfaced on actual read/write */ }
+        }
     }
     save(input) {
         const entries = input.entries

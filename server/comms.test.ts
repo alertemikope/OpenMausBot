@@ -215,6 +215,16 @@ describe("comms e2e (fake ACP fleet)", () => {
       const rnote = helperBot.messages.find((m: any) => m.kind === "activity" && m.tool?.name === "Message from @Asker");
       expect(rnote?.comm?.groupId).toBe(note.comm.groupId);
       expect(helperBot.busy).toBeFalsy();
+
+      // Mission Control receives one authoritative receipt per real turn,
+      // including the peer child rather than hiding that token-consuming work.
+      const work = (await api("GET", "/api/work")).body.items;
+      expect(work).toEqual(expect.arrayContaining([
+        expect.objectContaining({ targetBotId: asker.id, origin: "chat", state: "completed" }),
+        expect.objectContaining({ targetBotId: helper.id, origin: "peer", state: "completed" }),
+      ]));
+      expect(work.filter((item: any) => item.targetBotId === asker.id)).toHaveLength(1);
+      expect(work.filter((item: any) => item.targetBotId === helper.id)).toHaveLength(1);
     },
     40_000,
   );

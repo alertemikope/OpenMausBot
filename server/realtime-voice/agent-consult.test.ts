@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ProviderAdapter, RuntimeEvent } from "../contracts.ts";
+import type { WorkItem } from "../work/contracts.ts";
 import { HarnessAgentConsultRuntime } from "./agent-consult.ts";
 
 function runtimeEvent(type: RuntimeEvent["type"], overrides: Record<string, unknown> = {}): RuntimeEvent {
@@ -22,7 +23,7 @@ function fixture() {
     steerTurn: vi.fn(async () => ({ accepted: true })),
     respondToRequest: vi.fn(async () => {}),
   } as unknown as ProviderAdapter;
-  const startTurn = vi.fn(async () => {});
+  const startTurn = vi.fn(async () => ({ workItemId: "work-1" }));
   const runtime = new HarnessAgentConsultRuntime({
     resolveTarget: (targetId) => targetId === "bot-1"
       ? { targetId, threadId: "thread-1", busy: false, adapter }
@@ -46,7 +47,7 @@ describe("harness-backed AgentConsult runtime", () => {
       signal: new AbortController().signal,
       onEvent: vi.fn(),
     });
-    expect(startTurn).toHaveBeenCalledWith("bot-1", "Check July invoices", expect.any(Function));
+    expect(startTurn).toHaveBeenCalledWith("bot-1", "Check July invoices", expect.any(Function), undefined, "voice-1");
     emit(runtimeEvent("turn.started"));
     emit(runtimeEvent("item.started", { itemType: "tool", title: "gmail.search" }));
     await expect(runtime.control({ voiceSessionId: "voice-1", targetId: "bot-1", mode: "status", text: "status" }))
@@ -102,7 +103,7 @@ describe("harness-backed AgentConsult runtime", () => {
     } as unknown as ProviderAdapter;
     const runtime = new HarnessAgentConsultRuntime({
       resolveTarget: (targetId) => ({ targetId, threadId: `thread-${targetId}`, busy: false, adapter }),
-      startTurn: vi.fn(async () => {}),
+      startTurn: vi.fn(async () => ({ workItemId: "work-parallel" })),
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -130,5 +131,59 @@ describe("harness-backed AgentConsult runtime", () => {
     await expect(luna).resolves.toEqual({ text: "mail done" });
     await expect(codex).resolves.toEqual({ text: "code done" });
     expect(runtime.activeTargets()).toEqual([]);
+  });
+
+  it("persists a queued voice request and claims it exactly once at launch", async () => {
+    let listener: ((event: RuntimeEvent) => void) | undefined;
+    let queued: WorkItem | undefined;
+    const claim = vi.fn((id: string) => {
+      if (!queued || queued.id !== id || queued.state !== "queued") return false;
+      queued = { ...queued, state: "running" };
+      return true;
+    });
+    const startTurn = vi.fn(async () => ({ workItemId: "work-queued" }));
+    const adapter = { interruptTurn: vi.fn(), respondToRequest: vi.fn() } as unknown as ProviderAdapter;
+    const runtime = new HarnessAgentConsultRuntime({
+      resolveTarget: () => ({ targetId: "bot-1", threadId: "thread-1", busy: false, adapter }),
+      startTurn,
+      subscribe: (next) => {
+        listener = next;
+        return () => { listener = undefined; };
+      },
+      work: {
+        create: (input) => {
+          queued = {
+            ...input,
+            id: "work-queued",
+            state: "queued",
+            priority: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          };
+          return queued;
+        },
+        get: () => queued,
+        claim,
+        activeForTarget: () => queued,
+        list: () => queued ? [queued] : [],
+      },
+    });
+
+    const { workItemId } = runtime.enqueue({ voiceSessionId: "voice-1", targetId: "bot-1", prompt: "Do this next" });
+    expect(queued).toMatchObject({ id: workItemId, state: "queued", origin: "voice", objective: "Do this next" });
+    const result = runtime.run({
+      voiceSessionId: "voice-1",
+      targetId: "bot-1",
+      prompt: "Do this next",
+      workItemId,
+      signal: new AbortController().signal,
+      onEvent: vi.fn(),
+    });
+    expect(claim).toHaveBeenCalledOnce();
+    expect(startTurn).toHaveBeenCalledWith("bot-1", "Do this next", expect.any(Function), workItemId, "voice-1");
+    listener?.(runtimeEvent("turn.started"));
+    listener?.(runtimeEvent("item.completed", { itemType: "assistant_text", text: "Done" }));
+    listener?.(runtimeEvent("turn.completed", { ok: true }));
+    await expect(result).resolves.toEqual({ text: "Done" });
   });
 });

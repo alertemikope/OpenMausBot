@@ -61,9 +61,11 @@ export interface AgentConsultRuntime {
     voiceSessionId: string;
     targetId: string;
     prompt: string;
+    workItemId?: string;
     signal: AbortSignal;
     onEvent(event: RuntimeEvent): void;
   }): Promise<{ text: string }>;
+  enqueue?(input: { voiceSessionId: string; targetId: string; prompt: string }): { workItemId: string };
   activeTargets?(): string[];
 }
 

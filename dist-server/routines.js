@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DATA_DIR } from "./config.js";
+import { writeFileAtomic } from "./atomic.js";
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const CATCH_UP_MS = 12 * 60 * 60_000;
 const MAX_RUNS = 2_000;
@@ -88,6 +89,12 @@ export class RoutineManager {
         catch {
             this.routines = [];
             this.runs = [];
+        }
+        if (process.platform !== "win32") {
+            try {
+                chmodSync(this.file, 0o600);
+            }
+            catch { /* first run or externally managed file */ }
         }
         // A local process cannot still own these turns after a full restart.
         let recovered = false;
@@ -322,7 +329,7 @@ export class RoutineManager {
                         this.failThread(task.threadId, "The routine was deleted before it could start");
                         continue;
                     }
-                    await this.options.startTurn(run.botId, task.threadId, prompt, run.runOn ?? "maus", (message) => this.failThread(task.threadId, message));
+                    await this.options.startTurn(run.botId, task.threadId, prompt, run.runOn ?? "maus", run.id, (message) => this.failThread(task.threadId, message));
                 }
                 catch (error) {
                     this.failThread(task.threadId, error instanceof Error ? error.message : String(error));
@@ -403,12 +410,11 @@ export class RoutineManager {
         this.options.emit?.({ kind: "routine", routine: { ...routine, schedule: { ...routine.schedule } } });
     }
     emitRun(run) {
+        this.options.onRun?.({ ...run });
         this.options.emit?.({ kind: "routine.run", run: { ...run } });
     }
     save() {
-        mkdirSync(dirname(this.file), { recursive: true });
-        const temp = `${this.file}.tmp`;
-        writeFileSync(temp, JSON.stringify({ version: 1, routines: this.routines, runs: this.runs }, null, 2));
-        renameSync(temp, this.file);
+        mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
+        writeFileAtomic(this.file, JSON.stringify({ version: 1, routines: this.routines, runs: this.runs }, null, 2), 0o600);
     }
 }

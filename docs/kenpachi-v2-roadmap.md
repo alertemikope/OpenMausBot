@@ -4,6 +4,20 @@ Date de référence : 15 août 2026
 Branche : `feat/voice-wake-jarvis`  
 Baseline : `449bc10`
 
+## Statut de mise en œuvre
+
+**V2.1 — registre global du travail : livré le 15 août 2026.**
+
+- registre durable pour chat, voix, routines et peer agents ;
+- transitions fermées et reçus corrélés aux vrais événements provider ;
+- queues vocales persistantes, revendication idempotente et reprise après appel ;
+- état `interrupted_by_restart` au lieu d'un faux `running` ;
+- API list/cancel/seen et Mission Control globale ;
+- données locales atomiques en `0600`, répertoires privés en `0700` ;
+- protection contre les événements tardifs d'un ancien tour.
+
+Le prochain lot actif est **V2.2 — mémoire de travail post-appel**.
+
 ## 1. État réel
 
 ### Acquis
@@ -51,7 +65,7 @@ un assistant autonome complet. Il lui manque surtout :
 
 | Priorité | Lot | Impact | Effort | Dépend de |
 | --- | --- | --- | --- | --- |
-| P0 | A — registre global du travail | très élevé | L | baseline actuelle |
+| livré | A — registre global du travail | très élevé | L | baseline actuelle |
 | P0 | B — durcissement sécurité/observabilité | très élevé | M | A partiel |
 | P1 | C — mémoire de travail post-appel | élevé | M | A |
 | P1 | D — moteur de proactivité | très élevé | L | A + C |
@@ -464,10 +478,10 @@ Node 24 avant une modernisation du lockfile ou du compilateur.
 
 ### V2.1 — « Je sais exactement ce qui travaille »
 
-- Lot A complet ;
-- timeline minimale Mission Control ;
-- reprise/restart ;
-- notifications de résultat non lu.
+- [x] Lot A complet ;
+- [x] timeline minimale Mission Control ;
+- [x] reprise/restart ;
+- [x] notifications de résultat non lu.
 
 ### V2.2 — « Je me souviens sans inventer »
 

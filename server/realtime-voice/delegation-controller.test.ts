@@ -340,6 +340,33 @@ describe("GPT-Live delegation controller", () => {
     expect(socket.sent.join("\n")).toContain("Codex: codex running");
   });
 
+  it("durably queues new work behind a target owned by an earlier voice controller", async () => {
+    const socket = new FakeSocket();
+    const run = vi.fn();
+    const enqueue = vi.fn(() => ({ workItemId: "queued-across-call" }));
+    const controller = new LiveDelegationController({
+      voiceSessionId: "voice-new",
+      targetId: "luna",
+      targets: [{ id: "luna", name: "Luna Max" }],
+      activeTargets: () => ["luna"],
+      socket,
+      runtime: { run, enqueue },
+      control: vi.fn(),
+      respondToRequest: vi.fn(),
+      onFatal: vi.fn(),
+    });
+
+    controller.handle(delegation("next", "check the next report"));
+
+    await vi.waitFor(() => expect(enqueue).toHaveBeenCalledWith({
+      voiceSessionId: "voice-new",
+      targetId: "luna",
+      prompt: "check the next report",
+    }));
+    expect(run).not.toHaveBeenCalled();
+    expect(socket.sent.join("\n")).toContain("queued");
+  });
+
   it("resolves both the active GA task and the cancel control function", async () => {
     const socket = new FakeSocket();
     const control = vi.fn(async () => ({ ok: true, message: "The active agent task was cancelled." }));

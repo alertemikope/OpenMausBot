@@ -5,7 +5,7 @@
 // the shadow-instance behavior end to end while it's at it.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +44,23 @@ beforeAll(async () => {
   writeFileSync(
     join(home, ".openmausbot", "config.json"),
     JSON.stringify({ instances: { ghost: { driver: "not-a-real-driver", displayName: "Ghost" } } }),
+  );
+  writeFileSync(
+    join(home, ".openmausbot", "work-items.json"),
+    JSON.stringify({
+      version: 1,
+      items: [{
+        id: "work-before-restart",
+        origin: "voice",
+        targetBotId: "missing-bot",
+        objective: "Interrupted smoke work",
+        state: "running",
+        priority: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        startedAt: 1,
+      }],
+    }),
   );
 
   boxStub = createServer((req, res) => {
@@ -183,6 +200,19 @@ describe("harness HTTP API", () => {
     expect(status).toBe(200);
     expect(body.bots.length).toBeGreaterThanOrEqual(1);
     expect(body.bots[0].messages.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("exposes the durable Mission Control work registry", async () => {
+    const { status, body } = await api("GET", "/api/work");
+    expect(status).toBe(200);
+    expect(body.items).toMatchObject([{
+      id: "work-before-restart",
+      state: "interrupted_by_restart",
+      error: "OpenMausBot restarted while this work was running",
+    }]);
+    if (process.platform !== "win32") {
+      expect(statSync(join(home, ".openmausbot", "work-items.json")).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("describes the configured fleet, shadows included", async () => {

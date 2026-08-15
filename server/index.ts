@@ -36,6 +36,9 @@ import { manageVoiceRoutine } from "./realtime-voice/routine-manager.ts";
 import { HarnessAgentConsultRuntime } from "./realtime-voice/agent-consult.ts";
 import { ElectronOAuthClient } from "./realtime-voice/oauth-client.ts";
 import { RealtimeSessionBroker } from "./realtime-voice/session-broker.ts";
+import { WorkRegistry } from "./work/registry.ts";
+import type { WorkOrigin } from "./work/contracts.ts";
+import { WorkQueueCoordinator } from "./work/queue-coordinator.ts";
 
 const PORT = Number(process.env.OMB_PORT || process.env.OGB_PORT || 8799);
 const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
@@ -157,6 +160,8 @@ function broadcast(payload: unknown) {
   }
 }
 
+const work = new WorkRegistry({ emit: broadcast });
+
 // ── server-side event folding (upstream's ingestion worker, miniature) ──
 // The canonical stream is the source of truth; the persisted transcript
 // and every client view are projections of it.
@@ -177,6 +182,7 @@ let activeVmThreadId: string | null = null;
 let localVmLifecycleBusy = false;
 
 bus.subscribe((event: RuntimeEvent) => {
+  work.handleRuntimeEvent(event);
   broadcast({ kind: "runtime", event });
   routines?.handleRuntimeEvent(event);
   const bot = store.botByThread(event.threadId);
@@ -350,6 +356,7 @@ bus.subscribe((event: RuntimeEvent) => {
       }
       // group busy/unread settle in the group turn engine, which knows
       // whether more member turns are queued behind this one
+      scheduleWorkDrain();
       break;
     }
   }
@@ -446,6 +453,10 @@ async function startTurn(
     /** Cloud routines run the whole agent inside the bot's Box VM instead
      * of merely mounting that VM's computer tools on the MAUS's provider. */
     runOn?: RoutineRunOn;
+    /** Every dispatch has one durable receipt, regardless of its caller. */
+    origin?: WorkOrigin;
+    workItemId?: string;
+    voiceSessionId?: string;
     onDispatchError?: (message: string) => void;
   },
 ) {
@@ -477,6 +488,26 @@ async function startTurn(
   const mountsStdioMcp = instance.adapter.capabilities.stdioMcp === true;
   const googleWorkspace = mountsStdioMcp ? googleWorkspaceIntegration() : null;
   const memory = mountsStdioMcp ? piMemoryIntegration() : null;
+
+  let workItem = opts?.workItemId ? work.get(opts.workItemId) : undefined;
+  if (opts?.workItemId && !workItem) {
+    throw Object.assign(new Error("no such queued work item"), { status: 404 });
+  }
+  if (!workItem) {
+    workItem = work.create({
+      origin: opts?.origin ?? (commsDepth > 0 ? "peer" : "chat"),
+      targetBotId: bot.id,
+      threadId,
+      objective: text,
+      voiceSessionId: opts?.voiceSessionId,
+    });
+    work.claim(workItem.id);
+  } else {
+    if (workItem.targetBotId !== bot.id) throw Object.assign(new Error("work item target changed"), { status: 409 });
+    work.bindThread(workItem.id, threadId);
+    if (workItem.state === "queued") work.claim(workItem.id);
+  }
+  const workItemId = workItem.id;
 
   // an edit hands us its already-branched user message; a plain send appends
   let userMessage = opts?.userMessage;
@@ -663,7 +694,7 @@ async function startTurn(
           ? "You can work with the user's other bots through the agents tools — list_bots shows who's available, ask_bot sends one of them a message and returns their reply."
           : "";
 
-      await instance.adapter.sendTurn({
+      const dispatched = await instance.adapter.sendTurn({
         threadId,
         text: turnText,
         model,
@@ -689,6 +720,7 @@ async function startTurn(
             : ""),
         integrations,
       });
+      work.bindTurn(workItemId, dispatched.turnId, instanceId);
       // dispatched: the rewind is spent, and the old cursors are dead
       if (rewound) store.patchBot(bot.id, { rewound: false, resumeCursors: {} });
       if (previewBoxId) startScreenPoller(bot.id, previewBoxId);
@@ -704,8 +736,10 @@ async function startTurn(
       store.patchBot(bot.id, { busy: false });
       broadcast({ kind: "bot", bot: store.bot(bot.id) });
       opts?.onDispatchError?.(message);
+      work.failDispatch(workItemId, message);
     }
   })();
+  return { workItemId };
 }
 
 // Realtime voice delegates through this exact turn owner. It receives the
@@ -722,8 +756,10 @@ const agentConsult = new HarnessAgentConsultRuntime({
       adapter: registry.get(bot.modelSelection.instanceId)?.adapter,
     };
   },
-  startTurn: (targetId, prompt, onDispatchError) => startTurn(targetId, prompt, { onDispatchError }),
+  startTurn: (targetId, prompt, onDispatchError, workItemId, voiceSessionId) =>
+    startTurn(targetId, prompt, { onDispatchError, workItemId, voiceSessionId, origin: "voice" }),
   subscribe: (listener) => bus.subscribe(listener),
+  work,
 });
 
 const realtimeBroker = new RealtimeSessionBroker({
@@ -751,6 +787,7 @@ const realtimeBroker = new RealtimeSessionBroker({
 // only owner of provider sessions, approvals, tools, computers and messages.
 routines = new RoutineManager({
   emit: broadcast,
+  onRun: (run) => work.upsertRoutineRun(run),
   botState: (botId) => {
     const bot = store.bot(botId);
     return !bot ? "missing" : bot.busy ? "busy" : "ready";
@@ -761,8 +798,9 @@ routines = new RoutineManager({
     if (task && bot) broadcast({ kind: "bot", bot: publicBot(bot) });
     return task;
   },
-  startTurn: (botId, threadId, prompt, runOn, onDispatchError) =>
-    startTurn(botId, prompt, { threadId, runOn, onDispatchError }),
+  startTurn: async (botId, threadId, prompt, runOn, workItemId, onDispatchError) => {
+    await startTurn(botId, prompt, { threadId, runOn, workItemId, origin: "routine", onDispatchError });
+  },
   interruptTurn: async (botId, threadId, runOn) => {
     const bot = store.bot(botId);
     const instance = runOn === "cloud"
@@ -773,7 +811,30 @@ routines = new RoutineManager({
     await instance?.adapter.interruptTurn(threadId);
   },
 });
+for (const run of routines.listRuns()) work.upsertRoutineRun(run);
 routines.start();
+
+const workQueue = new WorkQueueCoordinator({
+  work,
+  targetState: (targetBotId) => {
+    const bot = store.bot(targetBotId);
+    return !bot ? "missing" : bot.busy ? "busy" : "ready";
+  },
+  start: async (item) => {
+    await startTurn(item.targetBotId, item.objective, {
+      origin: item.origin,
+      workItemId: item.id,
+      threadId: item.threadId,
+      voiceSessionId: item.voiceSessionId,
+    });
+  },
+});
+
+function scheduleWorkDrain(delay = 25) {
+  workQueue.schedule(delay);
+}
+
+scheduleWorkDrain(100);
 
 // ── config hot-reload ─────────────────────────────────────────────────
 // ── group turn engine ──────────────────────────────────────────────────
@@ -1246,6 +1307,54 @@ const server = createServer(async (req, res) => {
         return json(res, 200, { botName: target.name, text: reply });
       }
       return json(res, 404, { error: "unknown internal endpoint" });
+    }
+
+    // ── durable work registry / Mission Control ──────────────────────────
+    if (path === "/api/work" && method === "GET") {
+      const activeParam = url.searchParams.get("active");
+      const targetBotId = url.searchParams.get("targetBotId") || undefined;
+      const limitParam = Number(url.searchParams.get("limit") ?? 500);
+      return json(res, 200, {
+        items: work.list({
+          targetBotId,
+          active: activeParam == null ? undefined : activeParam === "true",
+          limit: Number.isFinite(limitParam) ? limitParam : 500,
+        }),
+      });
+    }
+    const workMatch = path.match(/^\/api\/work\/([\w-]+)\/(cancel|seen)$/);
+    if (workMatch && method === "POST") {
+      const item = work.get(workMatch[1]);
+      if (!item) return json(res, 404, { error: "no such work item" });
+      if (workMatch[2] === "seen") return json(res, 200, { item: work.markSeen(item.id) });
+      if (item.state === "queued") {
+        if (item.origin === "routine") {
+          const run = await routines!.cancelRun(item.id);
+          return run ? json(res, 200, { item: work.get(item.id) }) : json(res, 409, { error: "the routine run is no longer queued" });
+        }
+        return work.cancelQueued(item.id)
+          ? json(res, 200, { item: work.get(item.id) })
+          : json(res, 409, { error: "the work is no longer queued" });
+      }
+      if (!["running", "waiting_approval", "waiting_input"].includes(item.state) || !item.threadId) {
+        return json(res, 409, { error: "the work is no longer active" });
+      }
+      const bot = store.bot(item.targetBotId);
+      const instance = item.providerInstanceId
+        ? registry.get(item.providerInstanceId)
+        : bot
+          ? registry.get(bot.modelSelection.instanceId)
+          : null;
+      if (!instance) return json(res, 409, { error: "the work provider is unavailable" });
+      work.requestCancel(item.id);
+      try {
+        await instance.adapter.interruptTurn(item.threadId, item.turnId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        work.cancelRequestFailed(item.id, message);
+        throw error;
+      }
+      return json(res, 202, { item: work.get(item.id) });
     }
 
     // ── routines calendar ────────────────────────────────────────────────
@@ -1822,6 +1931,7 @@ server.listen(PORT, "127.0.0.1", () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     routines?.stop();
+    workQueue.stop();
     void realtimeBroker.closeAll().finally(() => registry.disposeAll().finally(() => process.exit(0)));
   });
 }

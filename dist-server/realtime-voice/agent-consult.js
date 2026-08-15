@@ -7,7 +7,25 @@ export class HarnessAgentConsultRuntime {
     generation = 0;
     constructor(deps) { this.deps = deps; }
     activeTargets() {
-        return [...this.active.keys()];
+        return [...new Set([
+                ...this.active.keys(),
+                ...(this.deps.work?.list({ active: true }).map((item) => item.targetBotId) ?? []),
+            ])];
+    }
+    enqueue(input) {
+        const target = this.deps.resolveTarget(input.targetId);
+        if (!target)
+            throw new Error("The selected OpenMaus bot no longer exists");
+        if (!this.deps.work)
+            throw new Error("The durable work queue is unavailable");
+        const item = this.deps.work.create({
+            origin: "voice",
+            targetBotId: input.targetId,
+            threadId: target.threadId,
+            objective: input.prompt,
+            voiceSessionId: input.voiceSessionId,
+        });
+        return { workItemId: item.id };
     }
     run(input) {
         const target = this.deps.resolveTarget(input.targetId);
@@ -15,6 +33,15 @@ export class HarnessAgentConsultRuntime {
             return Promise.reject(new Error("The selected OpenMaus bot no longer exists"));
         if (target.busy)
             return Promise.reject(new Error("The selected bot is already working; ask for status, steer it, or cancel first"));
+        if (input.workItemId && this.deps.work) {
+            const queued = this.deps.work.get(input.workItemId);
+            if (!queued || queued.targetBotId !== input.targetId || queued.state !== "queued") {
+                return Promise.reject(new Error("That queued agent task is no longer available"));
+            }
+            if (!this.deps.work.claim(input.workItemId)) {
+                return Promise.reject(new Error("That queued agent task was already claimed"));
+            }
+        }
         const generation = ++this.generation;
         const run = {
             generation,
@@ -23,6 +50,7 @@ export class HarnessAgentConsultRuntime {
             threadId: target.threadId,
             startedAt: Date.now(),
             progress: "Starting the selected OpenMaus bot",
+            ...(input.workItemId ? { workItemId: input.workItemId } : {}),
         };
         this.active.set(input.targetId, run);
         return new Promise((resolve, reject) => {
@@ -95,12 +123,23 @@ export class HarnessAgentConsultRuntime {
                 onAbort();
                 return;
             }
-            Promise.resolve(this.deps.startTurn(input.targetId, input.prompt, (message) => finish(new Error(message)))).catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
+            Promise.resolve(this.deps.startTurn(input.targetId, input.prompt, (message) => finish(new Error(message)), input.workItemId, input.voiceSessionId)).then(({ workItemId }) => {
+                run.workItemId = workItemId;
+            }).catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
         });
     }
     async control(input) {
         const run = this.active.get(input.targetId);
         if (!run) {
+            const work = this.deps.work?.activeForTarget(input.targetId);
+            if (input.mode === "status" && work) {
+                return {
+                    ok: true,
+                    message: work.state === "queued"
+                        ? `The task is queued: ${work.objective}.`
+                        : `${work.progress ?? "The agent is still working."}${work.currentTool ? ` Current tool: ${work.currentTool}.` : ""}`,
+                };
+            }
             return { ok: false, message: "There is no active delegated task." };
         }
         const target = this.deps.resolveTarget(run.targetId);
